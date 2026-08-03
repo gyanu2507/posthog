@@ -1,7 +1,7 @@
 import { useActions, useValues } from 'kea'
 
 import { IconRefresh, IconSearch, IconSparkles, IconWarning } from '@posthog/icons'
-import { Tooltip } from '@posthog/lemon-ui'
+import { LemonButton, Tooltip } from '@posthog/lemon-ui'
 import {
     Badge,
     Button,
@@ -22,6 +22,7 @@ import {
 
 import { TZLabel } from 'lib/components/TZLabel'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
+import { AIConsentPopoverWrapper } from 'scenes/settings/organization/AIConsentPopoverWrapper'
 
 import type { MCPIntentClusterApi, MCPIntentClusterToolEntryApi } from '../generated/api.schemas'
 import { ClusteringCoverageBanner } from './ClusteringCoverageBanner'
@@ -578,6 +579,41 @@ function EmptyState(): JSX.Element {
     )
 }
 
+function AIConsentRequired(): JSX.Element {
+    const { snapshotLoading, dataProcessingAccepted } = useValues(mcpClusteringLogic)
+    const { recompute } = useActions(mcpClusteringLogic)
+    return (
+        <LemonBanner type="warning">
+            <div className="flex flex-col items-start gap-2">
+                <div>
+                    <h4 className="font-semibold m-0">Intent clustering needs AI data processing</h4>
+                    <p className="m-0 mt-1">
+                        Clustering groups your agents&apos; stated intents into themes, which means sending them to an
+                        embedding model. Your organization hasn&apos;t approved AI data processing, so clustering
+                        can&apos;t run yet.
+                    </p>
+                </div>
+                {/* ignoreDismissal: this is the only way to unblock the tab, so a dismissal
+                    elsewhere must not leave the button disabled with no path forward. */}
+                <AIConsentPopoverWrapper showArrow ignoreDismissal onApprove={recompute} hidden={snapshotLoading}>
+                    <LemonButton
+                        type="primary"
+                        onClick={dataProcessingAccepted ? recompute : undefined}
+                        loading={snapshotLoading}
+                        sideIcon={null}
+                        disabledReason={
+                            dataProcessingAccepted ? undefined : 'AI data processing must be approved first'
+                        }
+                        data-attr="mcp-analytics-intent-clusters-enable-ai"
+                    >
+                        Enable and compute clusters
+                    </LemonButton>
+                </AIConsentPopoverWrapper>
+            </div>
+        </LemonBanner>
+    )
+}
+
 function ComputingSkeleton(): JSX.Element {
     return (
         <div className="flex flex-col gap-4">
@@ -638,9 +674,18 @@ function ToolsView(): JSX.Element {
 }
 
 export function MCPAnalyticsClustering(): JSX.Element {
-    const { snapshot, selectedCluster, hasSnapshot, isComputing, snapshotLoading, viewMode } =
+    const { snapshot, selectedCluster, hasSnapshot, isComputing, snapshotLoading, viewMode, aiConsentRequired } =
         useValues(mcpClusteringLogic)
     const { recompute } = useActions(mcpClusteringLogic)
+
+    // Consent is a hard prerequisite, so it replaces any state that has nothing to show anyway.
+    if (aiConsentRequired && (!hasSnapshot || snapshot.status === 'error')) {
+        return (
+            <div className="flex flex-col gap-3">
+                <AIConsentRequired />
+            </div>
+        )
+    }
 
     if (snapshot.status === 'error') {
         return (
@@ -666,28 +711,34 @@ export function MCPAnalyticsClustering(): JSX.Element {
     }
 
     return (
-        <div className="flex flex-col gap-4" data-quill>
-            <StatusRow />
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-                <ViewToggle />
-                <ClusteringCoverageBanner />
+        <div className="flex flex-col gap-4">
+            {/* Consent revoked after a snapshot was computed: keep the existing results readable,
+                but say why recomputing won't work. Outside the quill scope below, since the banner
+                is a Lemon component. */}
+            {aiConsentRequired ? <AIConsentRequired /> : null}
+            <div className="flex flex-col gap-4" data-quill>
+                <StatusRow />
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <ViewToggle />
+                    <ClusteringCoverageBanner />
+                </div>
+                {viewMode === 'tools' ? (
+                    <ToolsView />
+                ) : (
+                    <>
+                        <Scorecards />
+                        <SortHeader />
+                        <Heatmap />
+                        {selectedCluster ? (
+                            <ClusterDetail cluster={selectedCluster} />
+                        ) : (
+                            <div className="bg-surface-primary border rounded p-6 text-center text-muted text-sm">
+                                Click a cluster row above to see its sample intents and tool breakdown.
+                            </div>
+                        )}
+                    </>
+                )}
             </div>
-            {viewMode === 'tools' ? (
-                <ToolsView />
-            ) : (
-                <>
-                    <Scorecards />
-                    <SortHeader />
-                    <Heatmap />
-                    {selectedCluster ? (
-                        <ClusterDetail cluster={selectedCluster} />
-                    ) : (
-                        <div className="bg-surface-primary border rounded p-6 text-center text-muted text-sm">
-                            Click a cluster row above to see its sample intents and tool breakdown.
-                        </div>
-                    )}
-                </>
-            )}
         </div>
     )
 }
