@@ -1,8 +1,20 @@
 from typing import Any
 
+from prometheus_client import Counter
+
 from posthog.clickhouse.client import sync_execute
 from posthog.models.async_deletion import AsyncDeletion, DeletionType
 from posthog.models.async_deletion.delete import AsyncDeletionProcess, logger
+
+COHORT_DELETION_MARK_FAILURE_COUNTER = Counter(
+    "posthog_cohort_deletion_mark_failure_total",
+    "Times cohort deletion mark failed",
+)
+
+COHORT_DELETION_RUN_FAILURE_COUNTER = Counter(
+    "posthog_cohort_deletion_run_failure_total",
+    "Times cohort deletion run failed",
+)
 
 
 class AsyncCohortDeletion(AsyncDeletionProcess):
