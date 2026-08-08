@@ -24,6 +24,9 @@ from posthog.models.async_deletion.delete_cohorts import (
 )
 from posthog.models.person.sql import PERSONS_TABLE
 
+# The failure hook rebuilds the per-run asset names from this and the run id alone.
+SNAPSHOT_TABLE_PREFIX = "deleted_persons"
+
 
 class CleanupConfig(dagster.Config):
     dry_run: bool = pydantic.Field(
@@ -65,7 +68,7 @@ class DeletedPersonsTable:
 
     @property
     def table_name(self) -> str:
-        return f"deleted_persons_{self.run_id}"
+        return f"{SNAPSHOT_TABLE_PREFIX}_{self.run_id}"
 
     @property
     def qualified_name(self) -> str:
@@ -325,7 +328,29 @@ def drop_snapshot_assets(
     cluster.map_all_hosts(dictionary.source.drop).result()
 
 
-@dagster.job(tags={"owner": JobOwners.TEAM_CLICKHOUSE.value})
+@dagster.failure_hook(required_resource_keys={"cluster"})
+def drop_assets_on_failure(context: dagster.HookContext) -> None:
+    """Drop this run's assets when an op fails.
+
+    Dagster skips downstream ops after a failure, so drop_snapshot_assets never runs and the
+    per-run table and dictionary would survive on the cluster and accumulate across failures.
+    The names come from the run id alone, so this needs nothing from the failed op.
+
+    This ignores the cleanup flag on purpose. A stranded dictionary holds its whole key set in
+    memory on every host, which costs more than the ability to inspect it after a failure.
+    """
+    run_id = context.run_id.replace("-", "_")
+    qualified = f"{settings.CLICKHOUSE_DATABASE}.{SNAPSHOT_TABLE_PREFIX}_{run_id}"
+    cluster = context.resources.cluster
+
+    # The dictionary reads from the table, so it has to go first.
+    cluster.map_all_hosts(
+        lambda client: client.execute(f"DROP DICTIONARY IF EXISTS {qualified}_dictionary SYNC")
+    ).result()
+    cluster.map_all_hosts(lambda client: client.execute(f"DROP TABLE IF EXISTS {qualified} SYNC")).result()
+
+
+@dagster.job(hooks={drop_assets_on_failure}, tags={"owner": JobOwners.TEAM_CLICKHOUSE.value})
 def clickhouse_cleanup_job():
     """Sweep deleted persons out of ClickHouse, then deleted cohort memberships."""
     dictionary = load_and_verify_deleted_persons_dictionary(

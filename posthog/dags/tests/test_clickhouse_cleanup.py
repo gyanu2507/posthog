@@ -162,3 +162,22 @@ def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseClu
     # Collapsing the two guards into one try would skip the pass that actually removes rows.
     assert result.success
     assert cluster.any_host(cohort_rows).result() == 0
+
+
+@pytest.mark.django_db
+def test_a_failed_run_leaves_no_assets_behind(cluster: ClickhouseCluster):
+    create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+
+    # Fails once the dictionary is built, so there is something to strand.
+    with patch(
+        "posthog.dags.clickhouse_cleanup.LightweightDeleteMutationRunner",
+        side_effect=Exception("boom"),
+    ):
+        result = clickhouse_cleanup_job.execute_in_process(
+            run_config=RUN_FOR_REAL, resources={"cluster": cluster}, raise_on_error=False
+        )
+
+    # Dagster skips drop_snapshot_assets after a failure, so without the hook the dictionary
+    # would survive on every host and accumulate across failed runs.
+    assert not result.success
+    assert cluster.any_host(leftover_assets).result() == (0, 0)
