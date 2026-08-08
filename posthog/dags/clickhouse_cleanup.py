@@ -25,11 +25,7 @@ from posthog.clickhouse.cluster import (
     RetryPolicy,
 )
 from posthog.dags.common import JobOwners
-from posthog.models.async_deletion.delete_cohorts import (
-    COHORT_DELETION_MARK_FAILURE_COUNTER,
-    COHORT_DELETION_RUN_FAILURE_COUNTER,
-    AsyncCohortDeletion,
-)
+from posthog.models.async_deletion.delete_cohorts import sweep_cohort_deletions
 from posthog.models.person.sql import PERSONS_TABLE
 
 
@@ -231,26 +227,8 @@ def clear_removed_cohort_data(
         context.log.info("dry run: skipping the cohort sweep")
         return run
 
-    runner = AsyncCohortDeletion()
-    failures = []
-
-    # Each pass is guarded on its own: failing to tick off already-deleted cohorts must not stop
-    # the pass that actually removes rows.
-    try:
-        runner.mark_deletions_done()
-    except Exception:
-        context.log.exception("failed to mark cohort deletions done")
-        COHORT_DELETION_MARK_FAILURE_COUNTER.inc()
-        failures.append("mark")
-
-    try:
-        runner.run()
-    except Exception:
-        context.log.exception("failed to run cohort deletions")
-        COHORT_DELETION_RUN_FAILURE_COUNTER.inc()
-        failures.append("run")
-
-    context.add_output_metadata({"failed_passes": dagster.MetadataValue.text(", ".join(failures) or "none")})
+    failed = sweep_cohort_deletions()
+    context.add_output_metadata({"failed_passes": dagster.MetadataValue.text(", ".join(failed) or "none")})
     return run
 
 
@@ -398,3 +376,18 @@ def clickhouse_deletion_sweep_job():
     drop_snapshot_assets(
         delete_persons(load_and_verify_deleted_persons_dictionary(build_deleted_persons_dictionary(run)))
     )
+
+
+clickhouse_deletion_sweep_schedule = dagster.ScheduleDefinition(
+    job=clickhouse_deletion_sweep_job,
+    cron_schedule=settings.CLICKHOUSE_DELETION_SWEEP_SCHEDULE,
+    execution_timezone="UTC",
+    name="clickhouse_deletion_sweep_schedule",
+    # Enabled on registration. This PR deletes the Celery schedules that were doing this work, and
+    # a schedule that never fires raises no alert, so leaving it stopped would end weekly
+    # hard-deletion silently.
+    default_status=dagster.DefaultScheduleStatus.RUNNING,
+    # The schedule is the only launch that deletes. dry_run defaults to true, so an ad-hoc run from
+    # the Dagster UI reports what it would remove rather than removing it.
+    run_config={"ops": {"clear_removed_cohort_data": {"config": {"dry_run": False}}}},
+)

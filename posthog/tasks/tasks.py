@@ -729,36 +729,6 @@ def clickhouse_mutation_count() -> None:
         )
 
 
-@shared_task(ignore_result=True)
-def clickhouse_clear_removed_data() -> None:
-    from posthog.models.async_deletion.delete_cohorts import (
-        COHORT_DELETION_MARK_FAILURE_COUNTER,
-        COHORT_DELETION_RUN_FAILURE_COUNTER,
-        AsyncCohortDeletion,
-    )
-
-    cohort_runner = AsyncCohortDeletion()
-
-    try:
-        cohort_runner.mark_deletions_done()
-    except Exception as e:
-        logger.error("Failed to mark cohort deletions done", error=e, exc_info=True)
-        COHORT_DELETION_MARK_FAILURE_COUNTER.inc()
-
-    try:
-        cohort_runner.run()
-    except Exception as e:
-        logger.error("Failed to run cohort deletions", error=e, exc_info=True)
-        COHORT_DELETION_RUN_FAILURE_COUNTER.inc()
-
-
-@shared_task(ignore_result=True)
-def clear_clickhouse_deleted_person() -> None:
-    from posthog.models.async_deletion.delete_person import remove_deleted_person_data
-
-    remove_deleted_person_data()
-
-
 @shared_task(ignore_result=True, queue=CeleryQueue.STATS.value)
 def redis_celery_queue_depth() -> None:
     try:

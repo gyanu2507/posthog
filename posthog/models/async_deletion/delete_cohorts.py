@@ -98,3 +98,29 @@ class AsyncCohortDeletion(AsyncDeletionProcess):
                     key_param: key,
                 },
             )
+
+
+def sweep_cohort_deletions() -> list[str]:
+    """Run both cohort deletion passes and return the names of any that failed.
+
+    Each pass is guarded on its own: failing to tick off cohorts whose rows are already gone
+    must not stop the pass that actually removes rows.
+    """
+    runner = AsyncCohortDeletion()
+    failed = []
+
+    try:
+        runner.mark_deletions_done()
+    except Exception as e:
+        logger.error("Failed to mark cohort deletions done", error=e, exc_info=True)
+        COHORT_DELETION_MARK_FAILURE_COUNTER.inc()
+        failed.append("mark")
+
+    try:
+        runner.run()
+    except Exception as e:
+        logger.error("Failed to run cohort deletions", error=e, exc_info=True)
+        COHORT_DELETION_RUN_FAILURE_COUNTER.inc()
+        failed.append("run")
+
+    return failed

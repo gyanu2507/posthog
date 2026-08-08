@@ -200,7 +200,7 @@ def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseClu
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
 
     with patch(
-        "posthog.dags.clickhouse_cleanup.AsyncCohortDeletion.mark_deletions_done",
+        "posthog.models.async_deletion.delete_cohorts.AsyncCohortDeletion.mark_deletions_done",
         side_effect=Exception("boom"),
     ):
         result = clickhouse_deletion_sweep_job.execute_in_process(
