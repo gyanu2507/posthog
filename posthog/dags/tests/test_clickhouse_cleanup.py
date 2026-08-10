@@ -14,7 +14,9 @@ from posthog.models.person.util import create_person
 TEAM_ID = 4242
 COHORT_ID = 77
 
-RUN_FOR_REAL = {"ops": {"delete_persons": {"config": {"dry_run": False}}}}
+# dry_run is declared on the first op alone, which is what stops a launch from setting it on one
+# op and missing another.
+RUN_FOR_REAL = {"ops": {"clear_removed_cohort_data": {"config": {"dry_run": False}}}}
 
 
 def visible_persons(client: Client) -> int:
@@ -171,6 +173,26 @@ def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseClu
 
     # Collapsing the two guards into one try would skip the pass that actually removes rows.
     assert result.success
+    assert cluster.any_host(cohort_rows).result() == 0
+
+
+@pytest.mark.django_db
+def test_cohort_sweep_runs_even_when_the_person_delete_fails(cluster: ClickhouseCluster):
+    create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    seed_cohort_rows(cluster, count=10)
+    AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
+
+    with patch(
+        "posthog.dags.clickhouse_cleanup.LightweightDeleteMutationRunner",
+        side_effect=Exception("boom"),
+    ):
+        result = clickhouse_deletion_sweep_job.execute_in_process(
+            run_config=RUN_FOR_REAL, resources={"cluster": cluster}, raise_on_error=False
+        )
+
+    # Moving the cohort sweep back downstream of the person delete would strand cohort rows every
+    # week the person mutation ran long or failed, which is why it goes first.
+    assert not result.success
     assert cluster.any_host(cohort_rows).result() == 0
 
 

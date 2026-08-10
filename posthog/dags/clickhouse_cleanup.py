@@ -1,4 +1,4 @@
-"""Weekly ClickHouse cleanup sweeps: deleted persons, then deleted cohorts.
+"""Weekly ClickHouse cleanup sweeps: deleted cohort memberships, then deleted persons.
 
 ClickHouse cannot cheaply delete individual rows, so deletions are marked and swept later.
 Both sweeps issue cluster-wide mutations, and running those at the same time overloads the
@@ -16,6 +16,7 @@ import pydantic
 from clickhouse_driver.client import Client
 
 from posthog.clickhouse.cleanup_snapshots import CLEANUP_DELETED_PERSONS_TABLE
+from posthog.clickhouse.client.connection import ClickHouseUser, get_clickhouse_creds
 from posthog.clickhouse.cluster import ClickhouseCluster, LightweightDeleteMutationRunner, NodeRole
 from posthog.dags.common import JobOwners
 from posthog.models.async_deletion.delete_cohorts import (
@@ -41,16 +42,20 @@ class CleanupConfig(dagster.Config):
 
 
 @dataclass(frozen=True, kw_only=True)
-class SweepResult:
-    """What the person sweep hands to the ops after it.
+class CleanupRun:
+    """Every per-run asset, threaded through the ops so they execute in sequence.
 
     dry_run travels here rather than being read from config by each op, so it is set in one
     place. Declaring it on every op would let a launch set it on one and miss another, and
     half a sweep is worse than none.
     """
 
-    dictionary: "DeletedPersonsDictionary"
+    persons: "DeletedPersonsTable"
     dry_run: bool
+
+    @property
+    def persons_dictionary(self) -> "DeletedPersonsDictionary":
+        return DeletedPersonsDictionary(source=self.persons)
 
 
 @dataclass
@@ -82,8 +87,8 @@ class DeletedPersonsTable:
         # inner IN narrows the aggregation to persons with at least one deleted version.
         client.execute(
             f"""
-            INSERT INTO {self.qualified_name} (run_id, team_id, person_id)
-            SELECT %(run_id)s, team_id, id
+            INSERT INTO {self.qualified_name} (run_id, team_id, person_id, max_version)
+            SELECT %(run_id)s, team_id, id, max(version)
             FROM {PERSONS_TABLE}
             WHERE (team_id, id) IN (SELECT team_id, id FROM {PERSONS_TABLE} WHERE is_deleted > 0)
             GROUP BY team_id, id
@@ -125,10 +130,10 @@ class DeletedPersonsDictionary:
         return f"SELECT team_id, person_id FROM {self.source.qualified_name} WHERE run_id = '{self.source.run_id}'"
 
     def create(self, client: Client, shards: int, max_execution_time: int, max_memory_usage: int) -> None:
-        # The source authenticates as the default user, like the other dictionaries in this code
-        # location. get_clickhouse_creds(DICT_READER) would silently fall back to this same user
-        # rather than fail, so naming it here keeps the choice visible instead of implicit.
-        # Credentials are query parameters so they stay out of the traced statement.
+        # The source reads as the low-privilege dict_reader user, which falls back to the default
+        # user's credentials where dict_reader is not provisioned. Credentials are query parameters
+        # so they stay out of the traced statement.
+        creds = get_clickhouse_creds(ClickHouseUser.DICT_READER)
         client.execute(
             f"""
             CREATE DICTIONARY IF NOT EXISTS {self.qualified_name} (
@@ -143,8 +148,8 @@ class DeletedPersonsDictionary:
             """,
             {
                 "database": settings.CLICKHOUSE_DATABASE,
-                "user": settings.CLICKHOUSE_USER,
-                "password": settings.CLICKHOUSE_PASSWORD,
+                "user": creds.user,
+                "password": creds.password,
                 "query": self.query,
             },
         )
@@ -185,98 +190,23 @@ class DeletedPersonsDictionary:
 
 
 @dagster.op
-def snapshot_deleted_persons(
-    context: dagster.OpExecutionContext,
-    cluster: dagster.ResourceParam[ClickhouseCluster],
-) -> DeletedPersonsTable:
-    """Capture the persons whose latest version is deleted, tagged with this run's id."""
-    table = DeletedPersonsTable(run_id=context.run_id.replace("-", "_"))
-
-    cluster.any_host_by_role(table.populate, NodeRole.DATA).result()
-
-    # The insert lands on one host, but every host reads this table when the dictionary loads.
-    def sync_replica(client: Client) -> None:
-        client.execute(f"SYSTEM SYNC REPLICA {table.qualified_name} STRICT")
-
-    cluster.map_all_hosts(sync_replica).result()
-
-    count = cluster.any_host_by_role(table.count, NodeRole.DATA).result()
-    context.add_output_metadata(
-        {
-            "deleted_persons": dagster.MetadataValue.int(count),
-            "table_name": dagster.MetadataValue.text(table.table_name),
-        }
-    )
-    return table
-
-
-@dagster.op
-def build_deleted_persons_dictionary(
-    config: CleanupConfig,
-    cluster: dagster.ResourceParam[ClickhouseCluster],
-    snapshot_deleted_persons: DeletedPersonsTable,
-) -> DeletedPersonsDictionary:
-    """Create the dictionary the delete predicate probes, on every host."""
-    dictionary = DeletedPersonsDictionary(source=snapshot_deleted_persons)
-    cluster.map_all_hosts(
-        partial(
-            dictionary.create,
-            shards=config.shards,
-            max_execution_time=config.max_execution_time,
-            max_memory_usage=config.max_memory_usage,
-        )
-    ).result()
-    return dictionary
-
-
-@dagster.op
-def load_and_verify_deleted_persons_dictionary(
-    cluster: dagster.ResourceParam[ClickhouseCluster],
-    dictionary: DeletedPersonsDictionary,
-) -> DeletedPersonsDictionary:
-    """Load the dictionary on all hosts and confirm they hold identical keys."""
-    checksums = cluster.map_all_hosts(dictionary.load, concurrency=1).result()
-    assert len(set(checksums.values())) == 1
-    return dictionary
-
-
-@dagster.op
-def delete_persons(
-    context: dagster.OpExecutionContext,
-    config: CleanupConfig,
-    cluster: dagster.ResourceParam[ClickhouseCluster],
-    load_and_verify_deleted_persons_dictionary: DeletedPersonsDictionary,
-) -> SweepResult:
-    """Remove the snapshotted persons from the ClickHouse person table."""
-    dictionary = load_and_verify_deleted_persons_dictionary
-    context.add_output_metadata({"dry_run": dagster.MetadataValue.bool(config.dry_run)})
-
-    if config.dry_run:
-        context.log.info("dry run: skipping the delete from %s", PERSONS_TABLE)
-        return SweepResult(dictionary=dictionary, dry_run=True)
-
-    runner = LightweightDeleteMutationRunner(
-        table=PERSONS_TABLE,
-        predicate="dictHas(%(dictionary)s, (team_id, id))",
-        parameters={"dictionary": dictionary.qualified_name},
-    )
-
-    # person is replicated and not sharded, so a mutation started on one host reaches all of them.
-    mutation = cluster.any_host(runner).result()
-    cluster.map_all_hosts(mutation.wait).result()
-
-    return SweepResult(dictionary=dictionary, dry_run=False)
-
-
-@dagster.op
 def clear_removed_cohort_data(
     context: dagster.OpExecutionContext,
-    delete_persons: SweepResult,
-) -> SweepResult:
-    """Remove cohort membership rows for cohorts that were deleted or recalculated."""
-    if delete_persons.dry_run:
+    config: CleanupConfig,
+) -> CleanupRun:
+    """Remove cohort membership rows for cohorts that were deleted or recalculated.
+
+    Runs ahead of the person sweep rather than after it. The two cannot overlap, and the person
+    mutation can run for hours, so putting it first would leave cohort rows unswept whenever it
+    ran long or failed. Going first also keeps the person snapshot as close to its own delete as
+    possible, which is what bounds how many persons can revive mid-run.
+    """
+    run = CleanupRun(persons=DeletedPersonsTable(run_id=context.run_id.replace("-", "_")), dry_run=config.dry_run)
+    context.add_output_metadata({"dry_run": dagster.MetadataValue.bool(run.dry_run)})
+
+    if run.dry_run:
         context.log.info("dry run: skipping the cohort sweep")
-        return delete_persons
+        return run
 
     runner = AsyncCohortDeletion()
     failures = []
@@ -298,7 +228,87 @@ def clear_removed_cohort_data(
         failures.append("run")
 
     context.add_output_metadata({"failed_passes": dagster.MetadataValue.text(", ".join(failures) or "none")})
-    return delete_persons
+    return run
+
+
+@dagster.op
+def snapshot_deleted_persons(
+    context: dagster.OpExecutionContext,
+    cluster: dagster.ResourceParam[ClickhouseCluster],
+    run: CleanupRun,
+) -> CleanupRun:
+    """Capture the persons whose latest version is deleted, tagged with this run's id."""
+    table = run.persons
+
+    cluster.any_host_by_role(table.populate, NodeRole.DATA).result()
+
+    # The insert lands on one host, but every host reads this table when the dictionary loads.
+    def sync_replica(client: Client) -> None:
+        client.execute(f"SYSTEM SYNC REPLICA {table.qualified_name} STRICT")
+
+    cluster.map_all_hosts(sync_replica).result()
+
+    count = cluster.any_host_by_role(table.count, NodeRole.DATA).result()
+    context.add_output_metadata(
+        {
+            "deleted_persons": dagster.MetadataValue.int(count),
+            "table_name": dagster.MetadataValue.text(table.table_name),
+        }
+    )
+    return run
+
+
+@dagster.op
+def build_deleted_persons_dictionary(
+    config: CleanupConfig,
+    cluster: dagster.ResourceParam[ClickhouseCluster],
+    run: CleanupRun,
+) -> CleanupRun:
+    """Create the dictionary the delete predicate probes, on every host."""
+    cluster.map_all_hosts(
+        partial(
+            run.persons_dictionary.create,
+            shards=config.shards,
+            max_execution_time=config.max_execution_time,
+            max_memory_usage=config.max_memory_usage,
+        )
+    ).result()
+    return run
+
+
+@dagster.op
+def load_and_verify_deleted_persons_dictionary(
+    cluster: dagster.ResourceParam[ClickhouseCluster],
+    run: CleanupRun,
+) -> CleanupRun:
+    """Load the dictionary on all hosts and confirm they hold identical keys."""
+    checksums = cluster.map_all_hosts(run.persons_dictionary.load, concurrency=1).result()
+    assert len(set(checksums.values())) == 1
+    return run
+
+
+@dagster.op
+def delete_persons(
+    context: dagster.OpExecutionContext,
+    cluster: dagster.ResourceParam[ClickhouseCluster],
+    run: CleanupRun,
+) -> CleanupRun:
+    """Remove the snapshotted persons from the ClickHouse person table."""
+    if run.dry_run:
+        context.log.info("dry run: skipping the delete from %s", PERSONS_TABLE)
+        return run
+
+    runner = LightweightDeleteMutationRunner(
+        table=PERSONS_TABLE,
+        predicate="dictHas(%(dictionary)s, (team_id, id))",
+        parameters={"dictionary": run.persons_dictionary.qualified_name},
+    )
+
+    # person is replicated and not sharded, so a mutation started on one host reaches all of them.
+    mutation = cluster.any_host(runner).result()
+    cluster.map_all_hosts(mutation.wait).result()
+
+    return run
 
 
 @dagster.op
@@ -306,10 +316,10 @@ def drop_snapshot_assets(
     context: dagster.OpExecutionContext,
     config: CleanupConfig,
     cluster: dagster.ResourceParam[ClickhouseCluster],
-    clear_removed_cohort_data: SweepResult,
+    run: CleanupRun,
 ) -> None:
     """Drop this run's dictionary and clear the rows it read."""
-    dictionary = clear_removed_cohort_data.dictionary
+    dictionary = run.persons_dictionary
 
     if not config.cleanup:
         context.log.info("cleanup disabled, leaving %s in place", dictionary.qualified_name)
@@ -319,7 +329,7 @@ def drop_snapshot_assets(
     cluster.map_all_hosts(dictionary.drop).result()
     # The TTL would reap these anyway. Clearing them now keeps the shared table small enough that
     # a run's own rows stay cheap to read.
-    cluster.any_host_by_role(dictionary.source.delete_rows, NodeRole.DATA).result()
+    cluster.any_host_by_role(run.persons.delete_rows, NodeRole.DATA).result()
 
 
 @dagster.failure_hook(required_resource_keys={"cluster"})
@@ -345,9 +355,9 @@ def drop_assets_on_failure(context: dagster.HookContext) -> None:
 
 @dagster.job(hooks={drop_assets_on_failure}, tags={"owner": JobOwners.TEAM_CLICKHOUSE.value})
 def clickhouse_deletion_sweep_job():
-    """Sweep deleted persons out of ClickHouse, then deleted cohort memberships."""
-    dictionary = load_and_verify_deleted_persons_dictionary(
-        build_deleted_persons_dictionary(snapshot_deleted_persons())
-    )
+    """Sweep deleted cohort memberships out of ClickHouse, then deleted persons."""
     # Each op takes the previous op's output, which is what keeps the two sweeps in sequence.
-    drop_snapshot_assets(clear_removed_cohort_data(delete_persons(dictionary)))
+    run = snapshot_deleted_persons(clear_removed_cohort_data())
+    drop_snapshot_assets(
+        delete_persons(load_and_verify_deleted_persons_dictionary(build_deleted_persons_dictionary(run)))
+    )
