@@ -18,6 +18,7 @@ import { execGh } from "@posthog/git/gh";
 import { getCurrentBranch } from "@posthog/git/queries";
 import { ghTokenEnv } from "@posthog/git/signed-commit";
 import {
+  type AcpMcpServer,
   type Adapter,
   buildPrOutput,
   getErrorMessage,
@@ -26,6 +27,7 @@ import {
   parseMcpToolName,
   readMcpToolDescriptor,
   readPrUrls,
+  toAcpMcpServers,
 } from "@posthog/shared";
 import { unzipSync } from "fflate";
 import { Hono } from "hono";
@@ -1432,7 +1434,7 @@ export class AgentServer {
 
         return await this.session.clientConnection.extMethod(
           POSTHOG_METHODS.REFRESH_SESSION,
-          { mcpServers: refreshedMcpServers },
+          { mcpServers: toAcpMcpServers(refreshedMcpServers) },
         );
       }
 
@@ -1817,7 +1819,7 @@ export class AgentServer {
     let effectiveSessionMeta: typeof sessionMeta & {
       nativeGoal?: NonNullable<ResumeState["nativeGoal"]>;
     } = sessionMeta;
-    let sessionMcpServers: McpServerConnection[];
+    let sessionMcpServers: AcpMcpServer[];
     try {
       await this.installSkillBundleArtifacts(
         payload.task_id,
@@ -1834,10 +1836,10 @@ export class AgentServer {
         initialPermissionMode,
       );
 
-      sessionMcpServers = [
+      sessionMcpServers = toAcpMcpServers([
         ...(this.config.mcpServers ?? []),
         ...(await this.startMcpRelayServer()),
-      ];
+      ]);
     } finally {
       // Always consume the checkout result — on the success path this is the
       // intended await; on a throw it ensures the in-flight checkout settles
@@ -2432,7 +2434,7 @@ export class AgentServer {
     try {
       const response = await this.session.clientConnection.newSession({
         cwd: this.config.repositoryPath ?? "/tmp/workspace",
-        mcpServers: this.config.mcpServers ?? [],
+        mcpServers: toAcpMcpServers(this.config.mcpServers ?? []),
         _meta: this.session.sessionMeta,
       });
       this.session.acpSessionId = response.sessionId;
