@@ -47,16 +47,20 @@ def cohort_rows(client: Client) -> int:
     return count
 
 
-def leftover_assets(client: Client) -> tuple[int, int]:
-    # The snapshot table is created by migration and outlives every run, so what must not survive
-    # is the run's rows in it and the dictionary built over them. Both names derive from the table
-    # name, so this stays anchored to the constant rather than to a literal that can drift.
+def snapshot_rows(client: Client) -> int:
+    # The snapshot table is created by migration and outlives every run, so what a run has to clean
+    # up is its rows rather than the table. Anchored to the constant, not to a literal that can
+    # drift out of step with a rename.
     [[rows]] = client.execute(f"SELECT count() FROM {CLEANUP_DELETED_PERSONS_TABLE}")
+    return rows
+
+
+def leftover_dictionaries(client: Client) -> int:
     [[dictionaries]] = client.execute(
         "SELECT count() FROM system.dictionaries WHERE name LIKE %(pattern)s",
         {"pattern": f"{CLEANUP_DELETED_PERSONS_TABLE}\\_%"},
     )
-    return rows, dictionaries
+    return dictionaries
 
 
 def seed_cohort_rows(cluster: ClickhouseCluster, count: int) -> None:
@@ -137,7 +141,8 @@ def test_drops_the_dictionary_and_clears_the_run_rows(cluster: ClickhouseCluster
 
     # A leaked dictionary holds the key set in memory on every host. The rows are cheaper, but the
     # table is shared now, so a run that never clears its own rows makes every later run read them.
-    assert cluster.any_host(leftover_assets).result() == (0, 0)
+    assert cluster.any_host(leftover_dictionaries).result() == 0
+    assert cluster.any_host(snapshot_rows).result() == 0
 
 
 @pytest.mark.django_db
@@ -197,7 +202,7 @@ def test_cohort_sweep_runs_even_when_the_person_delete_fails(cluster: Clickhouse
 
 
 @pytest.mark.django_db
-def test_a_failed_run_leaves_no_assets_behind(cluster: ClickhouseCluster):
+def test_a_failed_run_drops_its_dictionary_and_keeps_its_rows(cluster: ClickhouseCluster):
     create_person(team_id=TEAM_ID, version=0, is_deleted=True)
 
     # Fails once the dictionary is built, so there is something to strand.
@@ -209,7 +214,10 @@ def test_a_failed_run_leaves_no_assets_behind(cluster: ClickhouseCluster):
             run_config=RUN_FOR_REAL, resources={"cluster": cluster}, raise_on_error=False
         )
 
+    assert not result.success
     # Dagster skips drop_snapshot_assets after a failure, so without the hook the dictionary
     # would survive on every host and accumulate across failed runs.
-    assert not result.success
-    assert cluster.any_host(leftover_assets).result() == (0, 0)
+    assert cluster.any_host(leftover_dictionaries).result() == 0
+    # The rows survive on purpose: they cost far less than a dictionary, the table's TTL reaps
+    # them, and they are what makes a failed sweep inspectable in the meantime.
+    assert cluster.any_host(snapshot_rows).result() > 0
