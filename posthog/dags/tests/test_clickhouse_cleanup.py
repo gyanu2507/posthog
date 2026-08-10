@@ -5,8 +5,9 @@ from unittest.mock import patch
 
 from clickhouse_driver import Client
 
+from posthog.clickhouse.cleanup_snapshots import CLEANUP_DELETED_PERSONS_TABLE
 from posthog.clickhouse.cluster import ClickhouseCluster
-from posthog.dags.clickhouse_cleanup import clickhouse_cleanup_job
+from posthog.dags.clickhouse_cleanup import clickhouse_deletion_sweep_job
 from posthog.models.async_deletion import AsyncDeletion, DeletionType
 from posthog.models.person.util import create_person
 
@@ -45,9 +46,15 @@ def cohort_rows(client: Client) -> int:
 
 
 def leftover_assets(client: Client) -> tuple[int, int]:
-    [[tables]] = client.execute("SELECT count() FROM system.tables WHERE name LIKE 'deleted_persons_%'")
-    [[dictionaries]] = client.execute("SELECT count() FROM system.dictionaries WHERE name LIKE 'deleted_persons_%'")
-    return tables, dictionaries
+    # The snapshot table is created by migration and outlives every run, so what must not survive
+    # is the run's rows in it and the dictionary built over them. Both names derive from the table
+    # name, so this stays anchored to the constant rather than to a literal that can drift.
+    [[rows]] = client.execute(f"SELECT count() FROM {CLEANUP_DELETED_PERSONS_TABLE}")
+    [[dictionaries]] = client.execute(
+        "SELECT count() FROM system.dictionaries WHERE name LIKE %(pattern)s",
+        {"pattern": f"{CLEANUP_DELETED_PERSONS_TABLE}\\_%"},
+    )
+    return rows, dictionaries
 
 
 def seed_cohort_rows(cluster: ClickhouseCluster, count: int) -> None:
@@ -72,7 +79,7 @@ def test_deletes_soft_deleted_persons_and_preserves_the_rest(cluster: Clickhouse
     revived = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
     create_person(uuid=revived, team_id=TEAM_ID, version=1, is_deleted=False)
 
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
 
     # The live version of deleted_later would survive a delete keyed on is_deleted rather than on
     # the person, so this asserts on the raw count rather than the collapsed one.
@@ -90,7 +97,7 @@ def test_no_op_when_nothing_is_soft_deleted(cluster: ClickhouseCluster):
     # The snapshot is empty, so the dictionary source returns nothing and dictHas never matches.
     create_person(team_id=TEAM_ID, version=0)
 
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
 
     assert cluster.any_host(visible_persons).result() == 1
 
@@ -100,9 +107,9 @@ def test_is_idempotent(cluster: ClickhouseCluster):
     create_person(team_id=TEAM_ID, version=0, is_deleted=True)
     create_person(team_id=TEAM_ID, version=0)
 
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
     # The first run tombstones the deleted rows, so the second snapshot no longer sees them.
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
 
     assert cluster.any_host(visible_persons).result() == 1
 
@@ -113,7 +120,7 @@ def test_dry_run_deletes_nothing(cluster: ClickhouseCluster):
     seed_cohort_rows(cluster, count=5)
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
 
-    clickhouse_cleanup_job.execute_in_process(resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(resources={"cluster": cluster})
 
     assert cluster.any_host(visible_persons).result() == 1
     assert cluster.any_host(cohort_rows).result() == 5
@@ -121,12 +128,13 @@ def test_dry_run_deletes_nothing(cluster: ClickhouseCluster):
 
 
 @pytest.mark.django_db
-def test_drops_the_snapshot_table_and_dictionary(cluster: ClickhouseCluster):
+def test_drops_the_dictionary_and_clears_the_run_rows(cluster: ClickhouseCluster):
     create_person(team_id=TEAM_ID, version=0, is_deleted=True)
 
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
 
-    # Both hold the key set cluster-wide, so leaking either one leaks memory on every host.
+    # A leaked dictionary holds the key set in memory on every host. The rows are cheaper, but the
+    # table is shared now, so a run that never clears its own rows makes every later run read them.
     assert cluster.any_host(leftover_assets).result() == (0, 0)
 
 
@@ -135,7 +143,7 @@ def test_clears_cohort_rows_and_marks_the_deletion_verified_on_the_next_run(clus
     seed_cohort_rows(cluster, count=10)
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
 
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
 
     # The mark pass runs before the delete pass, so it sees rows that are still present and
     # verification lands a run later. A reordering that drops the mark pass would leave
@@ -143,7 +151,7 @@ def test_clears_cohort_rows_and_marks_the_deletion_verified_on_the_next_run(clus
     assert cluster.any_host(cohort_rows).result() == 0
     assert AsyncDeletion.objects.get(team_id=TEAM_ID).delete_verified_at is None
 
-    clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
 
     assert AsyncDeletion.objects.get(team_id=TEAM_ID).delete_verified_at is not None
 
@@ -157,7 +165,9 @@ def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseClu
         "posthog.dags.clickhouse_cleanup.AsyncCohortDeletion.mark_deletions_done",
         side_effect=Exception("boom"),
     ):
-        result = clickhouse_cleanup_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+        result = clickhouse_deletion_sweep_job.execute_in_process(
+            run_config=RUN_FOR_REAL, resources={"cluster": cluster}
+        )
 
     # Collapsing the two guards into one try would skip the pass that actually removes rows.
     assert result.success
@@ -173,7 +183,7 @@ def test_a_failed_run_leaves_no_assets_behind(cluster: ClickhouseCluster):
         "posthog.dags.clickhouse_cleanup.LightweightDeleteMutationRunner",
         side_effect=Exception("boom"),
     ):
-        result = clickhouse_cleanup_job.execute_in_process(
+        result = clickhouse_deletion_sweep_job.execute_in_process(
             run_config=RUN_FOR_REAL, resources={"cluster": cluster}, raise_on_error=False
         )
 

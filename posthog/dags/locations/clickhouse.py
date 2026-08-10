@@ -33,7 +33,7 @@ defs = dagster.Definitions(
     ],
     jobs=[
         add_index_to_materialized_column.add_index_to_materialized_column,
-        clickhouse_cleanup.clickhouse_cleanup_job,
+        clickhouse_cleanup.clickhouse_deletion_sweep_job,
         create_materialized_column.create_materialized_column,
         drop_materialized_column.drop_materialized_column,
         deletes.deletes_job,

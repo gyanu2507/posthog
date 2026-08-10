@@ -15,6 +15,7 @@ import dagster
 import pydantic
 from clickhouse_driver.client import Client
 
+from posthog.clickhouse.cleanup_snapshots import CLEANUP_DELETED_PERSONS_TABLE
 from posthog.clickhouse.cluster import ClickhouseCluster, LightweightDeleteMutationRunner, NodeRole
 from posthog.dags.common import JobOwners
 from posthog.models.async_deletion.delete_cohorts import (
@@ -24,9 +25,6 @@ from posthog.models.async_deletion.delete_cohorts import (
 )
 from posthog.models.person.sql import PERSONS_TABLE
 
-# The failure hook rebuilds the per-run asset names from this and the run id alone.
-SNAPSHOT_TABLE_PREFIX = "deleted_persons"
-
 
 class CleanupConfig(dagster.Config):
     dry_run: bool = pydantic.Field(
@@ -35,7 +33,7 @@ class CleanupConfig(dagster.Config):
     )
     cleanup: bool = pydantic.Field(
         default=True,
-        description="Drop the dictionary and snapshot table when the run finishes.",
+        description="Drop the dictionary and clear this run's snapshot rows when the run finishes.",
     )
     shards: int = pydantic.Field(default=16, description="Dictionary SHARDS, which parallelize loading.")
     max_execution_time: int = pydantic.Field(default=0, description="Dictionary load timeout, 0 for no limit.")
@@ -57,40 +55,26 @@ class SweepResult:
 
 @dataclass
 class DeletedPersonsTable:
-    """Snapshot of the persons whose latest ClickHouse version is deleted.
+    """One run's slice of the persons whose latest ClickHouse version is deleted.
 
     The sweep removes those rows, which destroys the tombstones the set was derived from, so
     the set is captured here first and every later step reads it from here rather than
     recomputing it.
+
+    Every run writes into the same persisted table and reads back its own rows by run id.
+    Creating and dropping a replicated table per run instead would churn DDL across every node
+    once a week, and a run's rows expire on their own through the table's TTL.
     """
 
     run_id: str
 
     @property
     def table_name(self) -> str:
-        return f"{SNAPSHOT_TABLE_PREFIX}_{self.run_id}"
+        return CLEANUP_DELETED_PERSONS_TABLE
 
     @property
     def qualified_name(self) -> str:
         return f"{settings.CLICKHOUSE_DATABASE}.{self.table_name}"
-
-    @property
-    def zk_path(self) -> str:
-        # table_name carries the run id, so replicas of one run agree and separate runs never collide.
-        testing = "testing/" if settings.TEST else ""
-        return f"/clickhouse/tables/{testing}noshard/{self.table_name}"
-
-    def create(self, client: Client) -> None:
-        client.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.qualified_name} (
-                team_id Int64,
-                person_id UUID
-            )
-            ENGINE = ReplicatedReplacingMergeTree('{self.zk_path}', '{{shard}}-{{replica}}')
-            ORDER BY (team_id, person_id)
-            """
-        )
 
     def populate(self, client: Client) -> None:
         # A person can be soft-deleted and later revived by a higher version, so membership is
@@ -98,21 +82,28 @@ class DeletedPersonsTable:
         # inner IN narrows the aggregation to persons with at least one deleted version.
         client.execute(
             f"""
-            INSERT INTO {self.qualified_name} (team_id, person_id)
-            SELECT team_id, id
+            INSERT INTO {self.qualified_name} (run_id, team_id, person_id)
+            SELECT %(run_id)s, team_id, id
             FROM {PERSONS_TABLE}
             WHERE (team_id, id) IN (SELECT team_id, id FROM {PERSONS_TABLE} WHERE is_deleted > 0)
             GROUP BY team_id, id
             HAVING argMax(is_deleted, version) > 0
-            """
+            """,
+            {"run_id": self.run_id},
         )
 
     def count(self, client: Client) -> int:
-        [[count]] = client.execute(f"SELECT count() FROM {self.qualified_name}")
+        [[count]] = client.execute(
+            f"SELECT count() FROM {self.qualified_name} WHERE run_id = %(run_id)s",
+            {"run_id": self.run_id},
+        )
         return count
 
-    def drop(self, client: Client) -> None:
-        client.execute(f"DROP TABLE IF EXISTS {self.qualified_name} SYNC")
+    def delete_rows(self, client: Client) -> None:
+        client.execute(
+            f"ALTER TABLE {self.qualified_name} DELETE WHERE run_id = %(run_id)s",
+            {"run_id": self.run_id},
+        )
 
 
 @dataclass
@@ -121,7 +112,9 @@ class DeletedPersonsDictionary:
 
     @property
     def name(self) -> str:
-        return f"{self.source.table_name}_dictionary"
+        # Runs share the table, so the run id has to live on the dictionary instead for two runs
+        # not to fight over one name.
+        return f"{self.source.table_name}_{self.source.run_id}_dictionary"
 
     @property
     def qualified_name(self) -> str:
@@ -129,7 +122,7 @@ class DeletedPersonsDictionary:
 
     @property
     def query(self) -> str:
-        return f"SELECT team_id, person_id FROM {self.source.qualified_name}"
+        return f"SELECT team_id, person_id FROM {self.source.qualified_name} WHERE run_id = '{self.source.run_id}'"
 
     def create(self, client: Client, shards: int, max_execution_time: int, max_memory_usage: int) -> None:
         # The source authenticates as the default user, like the other dictionaries in this code
@@ -196,10 +189,9 @@ def snapshot_deleted_persons(
     context: dagster.OpExecutionContext,
     cluster: dagster.ResourceParam[ClickhouseCluster],
 ) -> DeletedPersonsTable:
-    """Capture the persons whose latest version is deleted into a per-run table."""
+    """Capture the persons whose latest version is deleted, tagged with this run's id."""
     table = DeletedPersonsTable(run_id=context.run_id.replace("-", "_"))
 
-    cluster.map_all_hosts(table.create).result()
     cluster.any_host_by_role(table.populate, NodeRole.DATA).result()
 
     # The insert lands on one host, but every host reads this table when the dictionary loads.
@@ -316,7 +308,7 @@ def drop_snapshot_assets(
     cluster: dagster.ResourceParam[ClickhouseCluster],
     clear_removed_cohort_data: SweepResult,
 ) -> None:
-    """Drop the per-run dictionary and snapshot table."""
+    """Drop this run's dictionary and clear the rows it read."""
     dictionary = clear_removed_cohort_data.dictionary
 
     if not config.cleanup:
@@ -325,33 +317,34 @@ def drop_snapshot_assets(
 
     # The dictionary reads from the table, so it has to go first.
     cluster.map_all_hosts(dictionary.drop).result()
-    cluster.map_all_hosts(dictionary.source.drop).result()
+    # The TTL would reap these anyway. Clearing them now keeps the shared table small enough that
+    # a run's own rows stay cheap to read.
+    cluster.any_host_by_role(dictionary.source.delete_rows, NodeRole.DATA).result()
 
 
 @dagster.failure_hook(required_resource_keys={"cluster"})
 def drop_assets_on_failure(context: dagster.HookContext) -> None:
-    """Drop this run's assets when an op fails.
+    """Drop this run's dictionary when an op fails.
 
     Dagster skips downstream ops after a failure, so drop_snapshot_assets never runs and the
-    per-run table and dictionary would survive on the cluster and accumulate across failures.
-    The names come from the run id alone, so this needs nothing from the failed op.
+    dictionary would survive on the cluster and accumulate across failures. The name comes from
+    the run id alone, so this needs nothing from the failed op.
 
     This ignores the cleanup flag on purpose. A stranded dictionary holds its whole key set in
     memory on every host, which costs more than the ability to inspect it after a failure.
+
+    The failed run's rows are left behind deliberately. They cost far less than a dictionary and
+    the table's TTL reaps them, so a failed sweep stays inspectable in the meantime.
     """
     run_id = context.run_id.replace("-", "_")
-    qualified = f"{settings.CLICKHOUSE_DATABASE}.{SNAPSHOT_TABLE_PREFIX}_{run_id}"
+    name = f"{settings.CLICKHOUSE_DATABASE}.{CLEANUP_DELETED_PERSONS_TABLE}_{run_id}_dictionary"
     cluster = context.resources.cluster
 
-    # The dictionary reads from the table, so it has to go first.
-    cluster.map_all_hosts(
-        lambda client: client.execute(f"DROP DICTIONARY IF EXISTS {qualified}_dictionary SYNC")
-    ).result()
-    cluster.map_all_hosts(lambda client: client.execute(f"DROP TABLE IF EXISTS {qualified} SYNC")).result()
+    cluster.map_all_hosts(lambda client: client.execute(f"DROP DICTIONARY IF EXISTS {name} SYNC")).result()
 
 
 @dagster.job(hooks={drop_assets_on_failure}, tags={"owner": JobOwners.TEAM_CLICKHOUSE.value})
-def clickhouse_cleanup_job():
+def clickhouse_deletion_sweep_job():
     """Sweep deleted persons out of ClickHouse, then deleted cohort memberships."""
     dictionary = load_and_verify_deleted_persons_dictionary(
         build_deleted_persons_dictionary(snapshot_deleted_persons())
