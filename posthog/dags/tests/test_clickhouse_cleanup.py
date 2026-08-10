@@ -1,22 +1,59 @@
+import itertools
+from collections.abc import Iterator
 from uuid import UUID
 
 import pytest
 from unittest.mock import patch
 
+import psycopg2
 from clickhouse_driver import Client
 
-from posthog.clickhouse.cleanup_snapshots import CLEANUP_DELETED_PERSONS_TABLE
+from posthog.clickhouse.cleanup_snapshots import (
+    CLEANUP_DELETED_PERSONS_TABLE,
+    CLEANUP_ORPHANED_DISTINCT_IDS_TABLE,
+    CLEANUP_REVIVED_DISTINCT_IDS_TABLE,
+    CLEANUP_REVIVED_PERSONS_TABLE,
+    CLEANUP_SNAPSHOT_TABLES,
+)
 from posthog.clickhouse.cluster import ClickhouseCluster
-from posthog.dags.clickhouse_cleanup import DeletedPersonsDictionary, clickhouse_deletion_sweep_job
+from posthog.dags import clickhouse_cleanup
+from posthog.dags.clickhouse_cleanup import (
+    PG_CLEANUP_QUEUE_TABLE,
+    OrphanedDistinctIdsTable,
+    clickhouse_deletion_sweep_job,
+)
 from posthog.models.async_deletion import AsyncDeletion, DeletionType
-from posthog.models.person.util import create_person
+from posthog.models.person.util import create_person, create_person_distinct_id
+from posthog.persons_db import persons_db_url
 
 TEAM_ID = 4242
 COHORT_ID = 77
 
 # dry_run is declared on the first op alone, which is what stops a launch from setting it on one
 # op and missing another.
+# dry_run defaults to true, so a real sweep opts in the way the schedule does. Declared on the first
+# op alone, which is what stops a launch from setting it on one op and missing another.
 RUN_FOR_REAL = {"ops": {"clear_removed_cohort_data": {"config": {"dry_run": False}}}}
+
+
+@pytest.fixture
+def persons_database() -> Iterator[psycopg2.extensions.connection]:
+    conn = psycopg2.connect(persons_db_url(writer=True))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(f"TRUNCATE {PG_CLEANUP_QUEUE_TABLE}")
+        conn.commit()
+        yield conn
+    finally:
+        conn.close()
+
+
+def run_job(cluster: ClickhouseCluster, persons_database, run_config=RUN_FOR_REAL, raise_on_error=True):
+    return clickhouse_deletion_sweep_job.execute_in_process(
+        run_config=run_config,
+        resources={"cluster": cluster, "persons_database": persons_database},
+        raise_on_error=raise_on_error,
+    )
 
 
 def visible_persons(client: Client) -> int:
@@ -42,25 +79,111 @@ def rows_for(person_uuid: str):
     return query
 
 
+def surviving_distinct_ids(client: Client) -> set[str]:
+    rows = client.execute(
+        "SELECT DISTINCT distinct_id FROM person_distinct_id2 WHERE team_id = %(team_id)s", {"team_id": TEAM_ID}
+    )
+    return {row[0] for row in rows}
+
+
+def current_owner(distinct_id: str):
+    def query(client: Client) -> UUID | None:
+        rows = client.execute(
+            """
+            SELECT argMax(person_id, version)
+            FROM person_distinct_id2
+            WHERE team_id = %(team_id)s AND distinct_id = %(distinct_id)s
+            GROUP BY distinct_id
+            """,
+            {"team_id": TEAM_ID, "distinct_id": distinct_id},
+        )
+        return rows[0][0] if rows else None
+
+    return query
+
+
 def cohort_rows(client: Client) -> int:
     [[count]] = client.execute("SELECT count() FROM cohortpeople WHERE team_id = %(team_id)s", {"team_id": TEAM_ID})
     return count
 
 
-def snapshot_rows(client: Client) -> int:
-    # The snapshot table is created by migration and outlives every run, so what a run has to clean
-    # up is its rows rather than the table. Anchored to the constant, not to a literal that can
-    # drift out of step with a rename.
-    [[rows]] = client.execute(f"SELECT count() FROM {CLEANUP_DELETED_PERSONS_TABLE}")
-    return rows
+def dictionaries_for_run(run_id: str):
+    """Count only this run's dictionaries.
+
+    Scoped to the run rather than the table prefixes, so the assertion cannot be thrown off by
+    leftovers another test or an earlier session left in the shared dev database.
+    """
+    suffix = f"%{run_id.replace('-', '_')}%"
+
+    def query(client: Client) -> int:
+        [[dictionaries]] = client.execute(
+            "SELECT count() FROM system.dictionaries WHERE name LIKE %(suffix)s", {"suffix": suffix}
+        )
+        return dictionaries
+
+    return query
 
 
-def leftover_dictionaries(client: Client) -> int:
-    [[dictionaries]] = client.execute(
-        "SELECT count() FROM system.dictionaries WHERE name LIKE %(pattern)s",
-        {"pattern": f"{CLEANUP_DELETED_PERSONS_TABLE}\\_%"},
-    )
-    return dictionaries
+def snapshot_rows_for_run(run_id: str):
+    """Count this run's rows across every snapshot table.
+
+    The tables are created by migration and outlive every run, so what a run has to clean up is
+    its rows rather than the tables. Anchored to the constants, not to literals that can drift out
+    of step with a rename.
+    """
+    scoped = run_id.replace("-", "_")
+
+    def query(client: Client) -> int:
+        return sum(
+            client.execute(
+                f"SELECT count() FROM {table} WHERE run_id = %(run_id)s",
+                {"run_id": scoped},
+            )[0][0]
+            for table in CLEANUP_SNAPSHOT_TABLES
+        )
+
+    return query
+
+
+DECOY_RUN_ID = "decoy_run"
+
+
+def seed_decoy_run(cluster: ClickhouseCluster, spared_person: str, spared_distinct_id: str, doomed_person: str) -> None:
+    """Fill every snapshot table with a second run's rows, chosen to break this run if it reads them.
+
+    The worklists name a live person and a live mapping, so an unscoped read would delete them. The
+    exclusion tables name the person this run is deleting, so an unscoped read would spare it.
+    """
+
+    def seed(client: Client) -> None:
+        client.execute(
+            f"INSERT INTO {CLEANUP_DELETED_PERSONS_TABLE} (run_id, team_id, person_id, max_version) VALUES",
+            [(DECOY_RUN_ID, TEAM_ID, spared_person, 0)],
+        )
+        client.execute(
+            f"INSERT INTO {CLEANUP_ORPHANED_DISTINCT_IDS_TABLE}"
+            " (run_id, team_id, distinct_id, person_id, own_tombstone, max_version) VALUES",
+            [(DECOY_RUN_ID, TEAM_ID, spared_distinct_id, spared_person, 1, 0)],
+        )
+        client.execute(
+            f"INSERT INTO {CLEANUP_REVIVED_PERSONS_TABLE} (run_id, team_id, person_id) VALUES",
+            [(DECOY_RUN_ID, TEAM_ID, doomed_person)],
+        )
+        client.execute(
+            f"INSERT INTO {CLEANUP_REVIVED_DISTINCT_IDS_TABLE} (run_id, team_id, distinct_id) VALUES",
+            [(DECOY_RUN_ID, TEAM_ID, "gone")],
+        )
+
+    cluster.any_host(seed).result()
+    cluster.map_all_hosts(
+        lambda client: [client.execute(f"SYSTEM SYNC REPLICA {table} STRICT") for table in CLEANUP_SNAPSHOT_TABLES]
+    ).result()
+
+
+def queued_rows(conn) -> list[tuple]:
+    with conn.cursor() as cursor:
+        cursor.execute(f"SELECT team_id, person_uuid, deleted_at, cleaned_at FROM {PG_CLEANUP_QUEUE_TABLE} ORDER BY 2")
+        return cursor.fetchall()
 
 
 def seed_cohort_rows(cluster: ClickhouseCluster, count: int) -> None:
@@ -70,39 +193,8 @@ def seed_cohort_rows(cluster: ClickhouseCluster, count: int) -> None:
     ).result()
 
 
-def versions_for(person_uuid: str):
-    def query(client: Client) -> list[int]:
-        rows = client.execute(
-            "SELECT version FROM person WHERE team_id = %(team_id)s AND id = %(id)s ORDER BY version",
-            {"team_id": TEAM_ID, "id": person_uuid},
-        )
-        return [row[0] for row in rows]
-
-    return query
-
-
 @pytest.mark.django_db
-def test_a_person_version_written_after_the_snapshot_survives(cluster: ClickhouseCluster):
-    # The delete is bounded by the version the snapshot observed. A client can recapture a deleted
-    # distinct id mid-run, which writes a live person version the run never saw; dropping the bound
-    # sweeps that new state away with the old.
-    doomed = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
-
-    original = DeletedPersonsDictionary.load
-
-    def revive_after_snapshot(self, client, timeout_seconds):
-        result = original(self, client, timeout_seconds)
-        create_person(uuid=doomed, team_id=TEAM_ID, version=500, is_deleted=False)
-        return result
-
-    with patch.object(DeletedPersonsDictionary, "load", revive_after_snapshot):
-        clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
-
-    assert cluster.any_host(versions_for(doomed)).result() == [500]
-
-
-@pytest.mark.django_db
-def test_deletes_soft_deleted_persons_and_preserves_the_rest(cluster: ClickhouseCluster):
+def test_deletes_soft_deleted_persons_and_preserves_the_rest(cluster: ClickhouseCluster, persons_database):
     # Deleted at a later version: every version has to go, which is why the delete keys on the
     # person rather than on is_deleted.
     deleted_later = create_person(team_id=TEAM_ID, version=0, is_deleted=False)
@@ -116,7 +208,7 @@ def test_deletes_soft_deleted_persons_and_preserves_the_rest(cluster: Clickhouse
     revived = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
     create_person(uuid=revived, team_id=TEAM_ID, version=1, is_deleted=False)
 
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    run_job(cluster, persons_database)
 
     # The live version of deleted_later would survive a delete keyed on is_deleted rather than on
     # the person, so this asserts on the raw count rather than the collapsed one.
@@ -130,58 +222,194 @@ def test_deletes_soft_deleted_persons_and_preserves_the_rest(cluster: Clickhouse
 
 
 @pytest.mark.django_db
-def test_no_op_when_nothing_is_soft_deleted(cluster: ClickhouseCluster):
+def test_removes_distinct_ids_of_deleted_persons_and_keeps_live_ones(cluster: ClickhouseCluster, persons_database):
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    live = create_person(team_id=TEAM_ID, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="gone", person_id=deleted, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="kept", person_id=live, version=0)
+
+    run_job(cluster, persons_database)
+
+    assert cluster.any_host(surviving_distinct_ids).result() == {"kept"}
+
+
+@pytest.mark.django_db
+def test_removes_a_distinct_id_that_tombstoned_itself(cluster: ClickhouseCluster, persons_database):
+    # The mapping is tombstoned while its person stays live, which is the leak the person-driven
+    # arm alone would miss.
+    live = create_person(team_id=TEAM_ID, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="detached", person_id=live, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="detached", person_id=live, version=100, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="kept", person_id=live, version=0)
+
+    run_job(cluster, persons_database)
+
+    assert cluster.any_host(surviving_distinct_ids).result() == {"kept"}
+
+
+@pytest.mark.django_db
+def test_keeps_a_distinct_id_repointed_to_a_live_person(cluster: ClickhouseCluster, persons_database):
+    # Newest version points at a live person, so the mapping is in use and has to stay whole.
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    live = create_person(team_id=TEAM_ID, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="moved", person_id=deleted, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="moved", person_id=live, version=1)
+
+    run_job(cluster, persons_database)
+
+    assert cluster.any_host(surviving_distinct_ids).result() == {"moved"}
+    assert cluster.any_host(current_owner("moved")).result() == UUID(live)
+
+
+@pytest.mark.django_db
+def test_removes_every_version_of_a_distinct_id_repointed_to_a_deleted_person(
+    cluster: ClickhouseCluster, persons_database
+):
+    # Newest version points at a deleted person. Deleting only the rows whose person_id matches
+    # would strip that row and hand the mapping back to the live person underneath it.
+    live = create_person(team_id=TEAM_ID, version=0)
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="moved", person_id=live, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="moved", person_id=deleted, version=1)
+
+    run_job(cluster, persons_database)
+
+    assert cluster.any_host(surviving_distinct_ids).result() == set()
+    assert cluster.any_host(current_owner("moved")).result() is None
+
+
+@pytest.mark.django_db
+def test_queues_the_deleted_persons_for_postgres(cluster: ClickhouseCluster, persons_database):
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person(team_id=TEAM_ID, version=0)
+
+    run_job(cluster, persons_database)
+
+    rows = queued_rows(persons_database)
+    assert len(rows) == 1
+    team_id, person_uuid, deleted_at, cleaned_at = rows[0]
+    assert (team_id, str(person_uuid)) == (TEAM_ID, deleted)
+    assert deleted_at is not None
+    assert cleaned_at is None
+
+    # A second run must not raise on the primary key: it re-queues persons the drain has not
+    # reached yet.
+    run_job(cluster, persons_database)
+    assert len(queued_rows(persons_database)) == 1
+
+
+@pytest.mark.django_db
+def test_requeues_a_person_the_drain_already_cleaned(cluster: ClickhouseCluster, persons_database):
+    # A person can be deleted, drained, then re-created and deleted again under the same uuid. The
+    # drain only reads rows where cleaned_at is null, so leaving the cleaned row untouched would
+    # drop the second deletion and leak that person's Postgres rows for good.
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    run_job(cluster, persons_database)
+
+    # Stand in for the drain having processed it.
+    with persons_database.cursor() as cursor:
+        cursor.execute(f"UPDATE {PG_CLEANUP_QUEUE_TABLE} SET cleaned_at = now()")
+    persons_database.commit()
+    assert queued_rows(persons_database)[0][3] is not None
+
+    # The same person is deleted again at a higher version, so a later run snapshots it afresh.
+    create_person(uuid=deleted, team_id=TEAM_ID, version=10, is_deleted=True)
+    run_job(cluster, persons_database)
+
+    rows = queued_rows(persons_database)
+    assert len(rows) == 1, "the row is keyed on (team_id, person_uuid), so this stays a single row"
+    assert rows[0][3] is None, "cleaned_at must be cleared so the drain picks the person up again"
+
+
+@pytest.mark.django_db
+def test_excludes_a_person_revived_while_the_run_is_in_flight(cluster: ClickhouseCluster, persons_database):
+    revived = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="spared", person_id=revived, version=0)
+    doomed = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="gone", person_id=doomed, version=0)
+
+    original = OrphanedDistinctIdsTable.populate
+
+    def revive_then_populate(self, client, persons_dictionary):
+        # Fires after the snapshot is taken and the dictionary is loaded, so the checkpoint is
+        # the only thing standing between the revived person and the delete.
+        create_person(uuid=revived, team_id=TEAM_ID, version=10, is_deleted=False)
+        return original(self, client, persons_dictionary)
+
+    with patch.object(OrphanedDistinctIdsTable, "populate", revive_then_populate):
+        run_job(cluster, persons_database)
+
+    assert cluster.any_host(surviving_distinct_ids).result() == {"spared"}
+    assert cluster.any_host(rows_for(doomed)).result() == 0
+    assert cluster.any_host(rows_for(revived)).result() > 0
+    # The queued set has to match the set deleted in ClickHouse. If they diverge, the Postgres
+    # drain clears a person that is still live here.
+    assert [str(row[1]) for row in queued_rows(persons_database)] == [doomed]
+
+
+@pytest.mark.django_db
+def test_no_op_when_nothing_is_soft_deleted(cluster: ClickhouseCluster, persons_database):
     # The snapshot is empty, so the dictionary source returns nothing and dictHas never matches.
-    create_person(team_id=TEAM_ID, version=0)
+    live = create_person(team_id=TEAM_ID, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="kept", person_id=live, version=0)
 
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    run_job(cluster, persons_database)
 
     assert cluster.any_host(visible_persons).result() == 1
+    assert cluster.any_host(surviving_distinct_ids).result() == {"kept"}
+    assert queued_rows(persons_database) == []
 
 
 @pytest.mark.django_db
-def test_is_idempotent(cluster: ClickhouseCluster):
-    create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+def test_is_idempotent(cluster: ClickhouseCluster, persons_database):
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="gone", person_id=deleted, version=0)
     create_person(team_id=TEAM_ID, version=0)
 
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    run_job(cluster, persons_database)
     # The first run tombstones the deleted rows, so the second snapshot no longer sees them.
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    run_job(cluster, persons_database)
 
     assert cluster.any_host(visible_persons).result() == 1
+    assert cluster.any_host(surviving_distinct_ids).result() == set()
 
 
 @pytest.mark.django_db
-def test_dry_run_deletes_nothing(cluster: ClickhouseCluster):
-    create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+def test_dry_run_deletes_nothing(cluster: ClickhouseCluster, persons_database):
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="gone", person_id=deleted, version=0)
     seed_cohort_rows(cluster, count=5)
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
 
-    clickhouse_deletion_sweep_job.execute_in_process(resources={"cluster": cluster})
+    run_job(cluster, persons_database, run_config=None)
 
     assert cluster.any_host(visible_persons).result() == 1
+    assert cluster.any_host(surviving_distinct_ids).result() == {"gone"}
     assert cluster.any_host(cohort_rows).result() == 5
+    assert queued_rows(persons_database) == []
     assert AsyncDeletion.objects.get(team_id=TEAM_ID).delete_verified_at is None
 
 
 @pytest.mark.django_db
-def test_drops_the_dictionary_and_clears_the_run_rows(cluster: ClickhouseCluster):
+def test_drops_the_dictionaries_and_clears_the_run_rows(cluster: ClickhouseCluster, persons_database):
     create_person(team_id=TEAM_ID, version=0, is_deleted=True)
 
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    result = run_job(cluster, persons_database)
 
-    # A leaked dictionary holds the key set in memory on every host. The rows are cheaper, but the
-    # table is shared now, so a run that never clears its own rows makes every later run read them.
-    assert cluster.any_host(leftover_dictionaries).result() == 0
-    assert cluster.any_host(snapshot_rows).result() == 0
+    # A leaked dictionary holds its key set in memory on every host. The rows are cheaper, but the
+    # tables are shared, so a run that never clears its own rows makes every later run read them.
+    assert cluster.any_host(dictionaries_for_run(result.run_id)).result() == 0
+    assert cluster.any_host(snapshot_rows_for_run(result.run_id)).result() == 0
 
 
 @pytest.mark.django_db
-def test_clears_cohort_rows_and_marks_the_deletion_verified_on_the_next_run(cluster: ClickhouseCluster):
+def test_clears_cohort_rows_and_marks_the_deletion_verified_on_the_next_run(
+    cluster: ClickhouseCluster, persons_database
+):
     seed_cohort_rows(cluster, count=10)
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
 
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    run_job(cluster, persons_database)
 
     # The mark pass runs before the delete pass, so it sees rows that are still present and
     # verification lands a run later. A reordering that drops the mark pass would leave
@@ -189,13 +417,13 @@ def test_clears_cohort_rows_and_marks_the_deletion_verified_on_the_next_run(clus
     assert cluster.any_host(cohort_rows).result() == 0
     assert AsyncDeletion.objects.get(team_id=TEAM_ID).delete_verified_at is None
 
-    clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+    run_job(cluster, persons_database)
 
     assert AsyncDeletion.objects.get(team_id=TEAM_ID).delete_verified_at is not None
 
 
 @pytest.mark.django_db
-def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseCluster):
+def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseCluster, persons_database):
     seed_cohort_rows(cluster, count=10)
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
 
@@ -203,9 +431,7 @@ def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseClu
         "posthog.models.async_deletion.delete_cohorts.AsyncCohortDeletion.mark_deletions_done",
         side_effect=Exception("boom"),
     ):
-        result = clickhouse_deletion_sweep_job.execute_in_process(
-            run_config=RUN_FOR_REAL, resources={"cluster": cluster}
-        )
+        result = run_job(cluster, persons_database)
 
     # Collapsing the two guards into one try would skip the pass that actually removes rows.
     assert result.success
@@ -213,7 +439,7 @@ def test_cohort_delete_pass_runs_when_the_mark_pass_fails(cluster: ClickhouseClu
 
 
 @pytest.mark.django_db
-def test_cohort_sweep_runs_even_when_the_person_delete_fails(cluster: ClickhouseCluster):
+def test_cohort_sweep_runs_even_when_the_person_delete_fails(cluster: ClickhouseCluster, persons_database):
     create_person(team_id=TEAM_ID, version=0, is_deleted=True)
     seed_cohort_rows(cluster, count=10)
     AsyncDeletion.objects.create(deletion_type=DeletionType.Cohort_full, team_id=TEAM_ID, key=f"{COHORT_ID}_0")
@@ -222,33 +448,185 @@ def test_cohort_sweep_runs_even_when_the_person_delete_fails(cluster: Clickhouse
         "posthog.dags.clickhouse_cleanup.LightweightDeleteMutationRunner",
         side_effect=Exception("boom"),
     ):
-        result = clickhouse_deletion_sweep_job.execute_in_process(
-            run_config=RUN_FOR_REAL, resources={"cluster": cluster}, raise_on_error=False
-        )
+        result = run_job(cluster, persons_database, raise_on_error=False)
 
-    # Moving the cohort sweep back downstream of the person delete would strand cohort rows every
-    # week the person mutation ran long or failed, which is why it goes first.
+    # Moving the cohort sweep back downstream of the person path would strand cohort rows every
+    # week that path ran long or failed, which is why it goes first.
     assert not result.success
     assert cluster.any_host(cohort_rows).result() == 0
 
 
 @pytest.mark.django_db
-def test_a_failed_run_drops_its_dictionary_and_keeps_its_rows(cluster: ClickhouseCluster):
+def test_a_run_ignores_another_runs_snapshot_rows(cluster: ClickhouseCluster, persons_database):
+    # Runs share the snapshot tables, so every read of them has to be scoped by run id. Drop any
+    # one of those WHERE clauses and this fails: the decoy's worklist rows delete a live person and
+    # a live mapping, and its exclusion rows spare the person this run is deleting.
+    live = create_person(team_id=TEAM_ID, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="kept", person_id=live, version=0)
+    doomed = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="gone", person_id=doomed, version=0)
+
+    seed_decoy_run(cluster, spared_person=live, spared_distinct_id="kept", doomed_person=doomed)
+
+    run_job(cluster, persons_database)
+
+    assert cluster.any_host(rows_for(live)).result() == 1
+    assert cluster.any_host(surviving_distinct_ids).result() == {"kept"}
+    assert cluster.any_host(rows_for(doomed)).result() == 0
+    assert [str(row[1]) for row in queued_rows(persons_database)] == [doomed]
+    # Clearing rows at the end of a run has to be scoped too, or one run wipes another's worklist.
+    assert cluster.any_host(snapshot_rows_for_run(DECOY_RUN_ID)).result() > 0
+
+
+@pytest.mark.django_db
+def test_a_failed_run_drops_its_dictionaries_and_keeps_its_rows(cluster: ClickhouseCluster, persons_database):
     create_person(team_id=TEAM_ID, version=0, is_deleted=True)
 
-    # Fails once the dictionary is built, so there is something to strand.
+    # Fails once the dictionaries are built, so there is something to strand.
     with patch(
         "posthog.dags.clickhouse_cleanup.LightweightDeleteMutationRunner",
         side_effect=Exception("boom"),
     ):
-        result = clickhouse_deletion_sweep_job.execute_in_process(
-            run_config=RUN_FOR_REAL, resources={"cluster": cluster}, raise_on_error=False
-        )
+        result = run_job(cluster, persons_database, raise_on_error=False)
 
     assert not result.success
-    # Dagster skips drop_snapshot_assets after a failure, so without the hook the dictionary
+    # Dagster skips drop_snapshot_assets after a failure, so without the hook the dictionaries
     # would survive on every host and accumulate across failed runs.
-    assert cluster.any_host(leftover_dictionaries).result() == 0
-    # The rows survive on purpose: they cost far less than a dictionary, the table's TTL reaps
+    assert cluster.any_host(dictionaries_for_run(result.run_id)).result() == 0
+    # The rows survive on purpose: they cost far less than a dictionary, the tables' TTL reaps
     # them, and they are what makes a failed sweep inspectable in the meantime.
-    assert cluster.any_host(snapshot_rows).result() > 0
+    assert cluster.any_host(snapshot_rows_for_run(result.run_id)).result() > 0
+
+
+@pytest.mark.django_db
+def test_keeps_a_distinct_id_recaptured_while_the_run_is_in_flight(cluster: ClickhouseCluster, persons_database):
+    live = create_person(team_id=TEAM_ID, version=0)
+    for distinct_id in ("recaptured", "gone"):
+        create_person_distinct_id(team_id=TEAM_ID, distinct_id=distinct_id, person_id=live, version=0)
+        create_person_distinct_id(
+            team_id=TEAM_ID, distinct_id=distinct_id, person_id=live, version=100, is_deleted=True
+        )
+
+    original = OrphanedDistinctIdsTable.populate
+
+    def recapture_then_populate(self, client, persons_dictionary):
+        result = original(self, client, persons_dictionary)
+        # A client captures the id again after the snapshot froze the reason it qualified. Trusting
+        # that snapshot would delete every version of the mapping, including this live one.
+        create_person_distinct_id(team_id=TEAM_ID, distinct_id="recaptured", person_id=live, version=200)
+        return result
+
+    with patch.object(OrphanedDistinctIdsTable, "populate", recapture_then_populate):
+        run_job(cluster, persons_database)
+
+    assert cluster.any_host(surviving_distinct_ids).result() == {"recaptured"}
+    assert cluster.any_host(current_owner("recaptured")).result() == UUID(live)
+
+
+def versions_for(distinct_id: str):
+    def query(client: Client) -> list[int]:
+        rows = client.execute(
+            "SELECT version FROM person_distinct_id2 WHERE team_id = %(team_id)s AND distinct_id = %(d)s ORDER BY version",
+            {"team_id": TEAM_ID, "d": distinct_id},
+        )
+        return [row[0] for row in rows]
+
+    return query
+
+
+def current_deleted(distinct_id: str):
+    def query(client: Client) -> int | None:
+        rows = client.execute(
+            """
+            SELECT argMax(is_deleted, version) FROM person_distinct_id2
+            WHERE team_id = %(team_id)s AND distinct_id = %(d)s GROUP BY distinct_id
+            """,
+            {"team_id": TEAM_ID, "d": distinct_id},
+        )
+        return rows[0][0] if rows else None
+
+    return query
+
+
+@pytest.mark.django_db
+def test_an_interrupted_sweep_leaves_the_tombstone_as_the_surviving_version(
+    cluster: ClickhouseCluster, persons_database
+):
+    # The reason the delete is ordered at all. The first pass runs for real; the second is cut off
+    # the way a killed or failed mutation would cut it off. The key must still resolve as deleted.
+    # Reverse the two passes and this fails: the tombstone goes first and the older live row is
+    # handed back to a person the run is about to delete.
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="doomed", person_id=deleted, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="doomed", person_id=deleted, version=100, is_deleted=True)
+
+    real_runner = clickhouse_cleanup.LightweightDeleteMutationRunner
+    calls = itertools.count()
+
+    def fail_on_the_second_pass(*args, **kwargs):
+        if next(calls) >= 1:
+            raise RuntimeError("interrupted between passes")
+        return real_runner(*args, **kwargs)
+
+    with patch.object(clickhouse_cleanup, "LightweightDeleteMutationRunner", fail_on_the_second_pass):
+        result = run_job(cluster, persons_database, raise_on_error=False)
+
+    assert not result.success
+    surviving = cluster.any_host(versions_for("doomed")).result()
+    assert surviving == [100], f"expected only the tombstone to survive, got {surviving}"
+    assert cluster.any_host(current_deleted("doomed")).result() == 1
+
+
+@pytest.mark.django_db
+def test_removes_every_version_below_the_max_in_one_pass(cluster: ClickhouseCluster, persons_database):
+    # Depth must not drive the number of passes: three versions collapse in the same two passes
+    # as two do.
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    for version in (0, 5):
+        create_person_distinct_id(team_id=TEAM_ID, distinct_id="deep", person_id=deleted, version=version)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="deep", person_id=deleted, version=100, is_deleted=True)
+
+    run_job(cluster, persons_database)
+
+    assert cluster.any_host(versions_for("deep")).result() == []
+
+
+@pytest.mark.django_db
+def test_rows_written_after_the_snapshot_survive(cluster: ClickhouseCluster, persons_database):
+    # Both passes are bounded by the snapshot's max_version, so a run never removes a row it did
+    # not observe.
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="racing", person_id=deleted, version=0)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="racing", person_id=deleted, version=100, is_deleted=True)
+
+    original = OrphanedDistinctIdsTable.populate
+
+    def write_after_snapshot(self, client, persons_dictionary):
+        result = original(self, client, persons_dictionary)
+        create_person_distinct_id(team_id=TEAM_ID, distinct_id="racing", person_id=deleted, version=500)
+        return result
+
+    with patch.object(OrphanedDistinctIdsTable, "populate", write_after_snapshot):
+        run_job(cluster, persons_database)
+
+    assert cluster.any_host(versions_for("racing")).result() == [500]
+
+
+@pytest.mark.django_db
+def test_team_ranges_cover_every_candidate_team_exactly_once():
+    teams = [3, 1, 9, 4, 7, 2]
+    ranges = clickhouse_cleanup._team_ranges(teams, batches=3)
+
+    assert clickhouse_cleanup._team_ranges([], batches=4) == []
+    # Contiguous and non-overlapping, so no key falls between two batches.
+    assert [low for low, _ in ranges] == sorted(low for low, _ in ranges)
+    for (_, high), (next_low, _) in zip(ranges, ranges[1:]):
+        assert high < next_low
+    for team in teams:
+        assert sum(1 for low, high in ranges if low <= team <= high) == 1
+
+
+@pytest.mark.django_db
+def test_more_batches_than_teams_does_not_produce_empty_ranges():
+    ranges = clickhouse_cleanup._team_ranges([5, 6], batches=10)
+    assert ranges == [(5, 5), (6, 6)]
