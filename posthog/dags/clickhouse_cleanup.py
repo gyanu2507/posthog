@@ -39,19 +39,24 @@ class CleanupConfig(dagster.Config):
     shards: int = pydantic.Field(default=16, description="Dictionary SHARDS, which parallelize loading.")
     max_execution_time: int = pydantic.Field(default=0, description="Dictionary load timeout, 0 for no limit.")
     max_memory_usage: int = pydantic.Field(default=0, description="Dictionary load memory cap, 0 for no limit.")
+    dictionary_load_timeout: int = pydantic.Field(
+        default=600,
+        description="How long to wait for a dictionary to finish loading on a host before failing the run.",
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
 class CleanupRun:
     """Every per-run asset, threaded through the ops so they execute in sequence.
 
-    dry_run travels here rather than being read from config by each op, so it is set in one
-    place. Declaring it on every op would let a launch set it on one and miss another, and
-    half a sweep is worse than none.
+    Settings that outlive the first op travel here rather than being read from config by each op,
+    so they are set in one place. Declaring dry_run on every op would let a launch set it on one
+    and miss another, and half a sweep is worse than none.
     """
 
     persons: "DeletedPersonsTable"
     dry_run: bool
+    dictionary_load_timeout: int
 
     @property
     def persons_dictionary(self) -> "DeletedPersonsDictionary":
@@ -127,7 +132,10 @@ class DeletedPersonsDictionary:
 
     @property
     def query(self) -> str:
-        return f"SELECT team_id, person_id FROM {self.source.qualified_name} WHERE run_id = '{self.source.run_id}'"
+        return (
+            f"SELECT team_id, person_id, max_version FROM {self.source.qualified_name}"
+            f" WHERE run_id = '{self.source.run_id}'"
+        )
 
     def create(self, client: Client, shards: int, max_execution_time: int, max_memory_usage: int) -> None:
         # The source reads as the low-privilege dict_reader user, which falls back to the default
@@ -138,7 +146,8 @@ class DeletedPersonsDictionary:
             f"""
             CREATE DICTIONARY IF NOT EXISTS {self.qualified_name} (
                 team_id Int64,
-                person_id UUID
+                person_id UUID,
+                max_version UInt64
             )
             PRIMARY KEY team_id, person_id
             SOURCE(CLICKHOUSE(DB %(database)s USER %(user)s PASSWORD %(password)s QUERY %(query)s))
@@ -173,12 +182,16 @@ class DeletedPersonsDictionary:
             raise Exception(f"{self.qualified_name} failed to load: {last_exception}")
         raise Exception(f"{self.qualified_name} in unexpected status: {status}")
 
-    def load(self, client: Client) -> int:
+    def load(self, client: Client, timeout_seconds: int) -> int:
         client.execute(f"SYSTEM RELOAD DICTIONARY {self.qualified_name}")
 
         # The reload is asynchronous, so the mutation would read a half-populated dictionary
-        # without this wait.
+        # without this wait. A dictionary wedged in LOADING would otherwise hold the run open
+        # forever, and a weekly job nobody is watching is exactly where that goes unnoticed.
+        deadline = time.monotonic() + timeout_seconds
         while not self.is_loaded(client):
+            if time.monotonic() > deadline:
+                raise Exception(f"{self.qualified_name} still not loaded after {timeout_seconds}s")
             time.sleep(5.0)
 
         return self.checksum(client)
@@ -201,7 +214,11 @@ def clear_removed_cohort_data(
     ran long or failed. Going first also keeps the person snapshot as close to its own delete as
     possible, which is what bounds how many persons can revive mid-run.
     """
-    run = CleanupRun(persons=DeletedPersonsTable(run_id=context.run_id.replace("-", "_")), dry_run=config.dry_run)
+    run = CleanupRun(
+        persons=DeletedPersonsTable(run_id=context.run_id.replace("-", "_")),
+        dry_run=config.dry_run,
+        dictionary_load_timeout=config.dictionary_load_timeout,
+    )
     context.add_output_metadata({"dry_run": dagster.MetadataValue.bool(run.dry_run)})
 
     if run.dry_run:
@@ -282,7 +299,10 @@ def load_and_verify_deleted_persons_dictionary(
     run: CleanupRun,
 ) -> CleanupRun:
     """Load the dictionary on all hosts and confirm they hold identical keys."""
-    checksums = cluster.map_all_hosts(run.persons_dictionary.load, concurrency=1).result()
+    checksums = cluster.map_all_hosts(
+        partial(run.persons_dictionary.load, timeout_seconds=run.dictionary_load_timeout),
+        concurrency=1,
+    ).result()
     assert len(set(checksums.values())) == 1
     return run
 
@@ -293,15 +313,23 @@ def delete_persons(
     cluster: dagster.ResourceParam[ClickhouseCluster],
     run: CleanupRun,
 ) -> CleanupRun:
-    """Remove the snapshotted persons from the ClickHouse person table."""
+    """Remove the snapshotted persons from the ClickHouse person table.
+
+    Bounded by the version the snapshot observed, so a person recreated after the snapshot keeps
+    the rows this run never saw. Without the bound, a client recapturing a deleted distinct id
+    mid-run would have that new person state swept away.
+    """
     if run.dry_run:
         context.log.info("dry run: skipping the delete from %s", PERSONS_TABLE)
         return run
 
+    dictionary = run.persons_dictionary.qualified_name
     runner = LightweightDeleteMutationRunner(
         table=PERSONS_TABLE,
-        predicate="dictHas(%(dictionary)s, (team_id, id))",
-        parameters={"dictionary": run.persons_dictionary.qualified_name},
+        predicate=(
+            f"isNotNull(dictGetOrNull({dictionary!r}, 'max_version', (team_id, id)) as snapshot_max)"
+            " AND version <= snapshot_max"
+        ),
     )
 
     # person is replicated and not sharded, so a mutation started on one host reaches all of them.

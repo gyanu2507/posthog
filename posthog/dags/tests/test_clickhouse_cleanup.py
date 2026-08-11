@@ -7,7 +7,7 @@ from clickhouse_driver import Client
 
 from posthog.clickhouse.cleanup_snapshots import CLEANUP_DELETED_PERSONS_TABLE
 from posthog.clickhouse.cluster import ClickhouseCluster
-from posthog.dags.clickhouse_cleanup import clickhouse_deletion_sweep_job
+from posthog.dags.clickhouse_cleanup import DeletedPersonsDictionary, clickhouse_deletion_sweep_job
 from posthog.models.async_deletion import AsyncDeletion, DeletionType
 from posthog.models.person.util import create_person
 
@@ -68,6 +68,37 @@ def seed_cohort_rows(cluster: ClickhouseCluster, count: int) -> None:
     cluster.any_host(
         lambda client: client.execute("INSERT INTO cohortpeople (team_id, person_id, cohort_id, sign) VALUES", rows)
     ).result()
+
+
+def versions_for(person_uuid: str):
+    def query(client: Client) -> list[int]:
+        rows = client.execute(
+            "SELECT version FROM person WHERE team_id = %(team_id)s AND id = %(id)s ORDER BY version",
+            {"team_id": TEAM_ID, "id": person_uuid},
+        )
+        return [row[0] for row in rows]
+
+    return query
+
+
+@pytest.mark.django_db
+def test_a_person_version_written_after_the_snapshot_survives(cluster: ClickhouseCluster):
+    # The delete is bounded by the version the snapshot observed. A client can recapture a deleted
+    # distinct id mid-run, which writes a live person version the run never saw; dropping the bound
+    # sweeps that new state away with the old.
+    doomed = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+
+    original = DeletedPersonsDictionary.load
+
+    def revive_after_snapshot(self, client, timeout_seconds):
+        result = original(self, client, timeout_seconds)
+        create_person(uuid=doomed, team_id=TEAM_ID, version=500, is_deleted=False)
+        return result
+
+    with patch.object(DeletedPersonsDictionary, "load", revive_after_snapshot):
+        clickhouse_deletion_sweep_job.execute_in_process(run_config=RUN_FOR_REAL, resources={"cluster": cluster})
+
+    assert cluster.any_host(versions_for(doomed)).result() == [500]
 
 
 @pytest.mark.django_db
