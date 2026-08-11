@@ -63,7 +63,7 @@ class CleanupRun:
         return DeletedPersonsDictionary(source=self.persons)
 
 
-@dataclass
+@dataclass(frozen=True)
 class DeletedPersonsTable:
     """One run's slice of the persons whose latest ClickHouse version is deleted.
 
@@ -116,7 +116,7 @@ class DeletedPersonsTable:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class DeletedPersonsDictionary:
     source: DeletedPersonsTable
 
