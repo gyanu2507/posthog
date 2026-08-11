@@ -1,10 +1,10 @@
 """Repair `Team.session_recording_linked_flag` rows whose stored key no longer matches the flag.
 
-Renaming a feature flag used to leave the stored key behind, and the SDKs read the key rather
-than the id, so those teams stopped recording sessions entirely. `relink_teams_on_key_change` in
-`session_recording_links` now keeps the key in step for every rename that goes through
-`FeatureFlag.save()`; this command fixes the rows that were already stale when it was wired up,
-plus any left by a writer that bypasses `save()`, such as the `bulk_update` in `bulk_delete`.
+The SDKs resolve the linked flag by key rather than by id, so a stored key that no longer matches
+its flag silently stops the team recording. `relink_teams_on_key_change` in
+`session_recording_links` covers every rename that goes through `FeatureFlag.save()`; this command
+repairs the rows that predate that receiver, plus any left behind by a writer that bypasses
+`save()`, such as the `bulk_update` in `bulk_delete`.
 
 Only rows whose stored id resolves to a live flag in the team's own project are rewritten. Rows
 pointing at a soft-deleted flag or at a flag in another project are counted and reported but
@@ -25,7 +25,7 @@ from django.db.models import QuerySet
 from posthog.models import Team
 
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
-from products.feature_flags.backend.session_recording_links import update_linked_flag_key
+from products.feature_flags.backend.session_recording_links import linked_flag_id, update_linked_flag_key
 
 
 class Outcome(StrEnum):
@@ -45,9 +45,10 @@ class _FlagRow:
 
 
 def _iter_team_chunks(queryset: QuerySet[Team], chunk_size: int) -> Iterator[list[Team]]:
+    # `Team` is a wide model with several large JSONFields, and the scan reads three columns.
+    base = queryset.only("id", "project_id", "session_recording_linked_flag").order_by("id")
     # Keyset pagination instead of .iterator(): prod runs behind PgBouncer with server-side
     # cursors disabled, so .iterator() buffers the whole result set client-side on execute.
-    base = queryset.order_by("id")
     last_id = 0
     while True:
         chunk = list(base.filter(id__gt=last_id)[:chunk_size])
@@ -55,19 +56,6 @@ def _iter_team_chunks(queryset: QuerySet[Team], chunk_size: int) -> Iterator[lis
             return
         yield chunk
         last_id = chunk[-1].id
-
-
-def _linked_flag_id(linked_flag: Any) -> int | None:
-    if not isinstance(linked_flag, dict):
-        return None
-    stored_id = linked_flag.get("id")
-    # The column is schemaless, so anything an API client or the admin's JSON widget sent can be
-    # here. Only an int is acted on; every other shape is reported as malformed for a human to
-    # look at rather than coerced. `bool` is excluded explicitly because it subclasses `int`, so
-    # `{"id": true}` would otherwise repair against flag 1.
-    if isinstance(stored_id, bool) or not isinstance(stored_id, int):
-        return None
-    return stored_id
 
 
 class Command(BaseCommand):
@@ -95,33 +83,34 @@ class Command(BaseCommand):
         if options["team_id"]:
             queryset = queryset.filter(id__in=options["team_id"])
 
-        scanned = 0
-        # Every row except already_correct, which needs no follow-up and would dwarf the rest.
-        details: list[dict[str, Any]] = []
+        outcomes: Counter[Outcome] = Counter()
+        repairs: list[dict[str, Any]] = []
+        unrepairable: list[dict[str, Any]] = []
 
         for teams in _iter_team_chunks(queryset, chunk_size):
             flags_by_id = self._load_flags(teams)
             for team in teams:
-                scanned += 1
                 outcome, detail = self._repair_team(team, flags_by_id, dry_run=dry_run)
-                if outcome != Outcome.ALREADY_CORRECT:
-                    details.append({"outcome": outcome, **detail})
+                outcomes[outcome] += 1
+                if outcome == Outcome.REPAIRED:
+                    repairs.append({"outcome": outcome, **detail})
+                elif outcome != Outcome.ALREADY_CORRECT:
+                    # already_correct rows need no follow-up and would dwarf the report, so only
+                    # their count is kept.
+                    unrepairable.append({"outcome": outcome, **detail})
 
-        outcomes: Counter[Outcome] = Counter(row["outcome"] for row in details)
-        if already_correct := scanned - len(details):
-            outcomes[Outcome.ALREADY_CORRECT] = already_correct
         report = {
             "dry_run": dry_run,
-            "scanned": scanned,
+            "scanned": outcomes.total(),
             "outcomes": dict(outcomes),
-            "repairs": [row for row in details if row["outcome"] == Outcome.REPAIRED],
-            "unrepairable": [row for row in details if row["outcome"] != Outcome.REPAIRED],
+            "repairs": repairs,
+            "unrepairable": unrepairable,
         }
         self._report(report, as_json=as_json)
 
     def _load_flags(self, teams: list[Team]) -> dict[int, _FlagRow]:
         flag_ids = {
-            flag_id for team in teams if (flag_id := _linked_flag_id(team.session_recording_linked_flag)) is not None
+            flag_id for team in teams if (flag_id := linked_flag_id(team.session_recording_linked_flag)) is not None
         }
         if not flag_ids:
             return {}
@@ -139,7 +128,7 @@ class Command(BaseCommand):
         linked_flag = team.session_recording_linked_flag
         detail: dict[str, Any] = {"team_id": team.id, "project_id": team.project_id, "linked_flag": linked_flag}
 
-        stored_id = _linked_flag_id(linked_flag)
+        stored_id = linked_flag_id(linked_flag)
         if stored_id is None:
             return Outcome.MALFORMED, detail
 
@@ -175,7 +164,7 @@ class Command(BaseCommand):
             )
 
         for outcome, count in sorted(report["outcomes"].items()):
-            if outcome != Outcome.REPAIRED and count:
+            if outcome != Outcome.REPAIRED:
                 self.stdout.write(f"{outcome}: {count}")
 
         if report["unrepairable"]:

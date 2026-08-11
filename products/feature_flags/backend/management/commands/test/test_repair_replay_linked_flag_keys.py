@@ -60,8 +60,6 @@ class TestRepairReplayLinkedFlagKeys(BaseTest):
         assert self._run("--live-run", teams=[self.team])["outcomes"] == {"already_correct": 1}
 
     def test_reports_the_repair_without_writing_unless_asked(self) -> None:
-        # Writing has to be opted into: a bare run rewrites every team's replay config and
-        # enqueues a RemoteConfig rebuild per row.
         flag = FeatureFlag.objects.create(team=self.team, created_by=self.user, key="replay-gate-v2")
         self._link_flag(self.team, {"id": flag.id, "key": "replay-gate"})
 
@@ -72,40 +70,9 @@ class TestRepairReplayLinkedFlagKeys(BaseTest):
         self.team.refresh_from_db()
         assert self.team.session_recording_linked_flag == {"id": flag.id, "key": "replay-gate"}
 
-    @parameterized.expand(
-        [
-            ("flag_soft_deleted", "flag_soft_deleted"),
-            ("flag_in_other_project", "flag_in_other_project"),
-            ("flag_missing", "flag_missing"),
-            ("missing_id", "malformed"),
-            ("bool_id", "malformed"),
-            ("non_numeric_id", "malformed"),
-        ]
-    )
-    def test_leaves_links_it_cannot_safely_repair_alone(self, case: str, outcome: str) -> None:
+    def _assert_link_survives(self, linked_flag: dict[str, Any], outcome: str) -> None:
         # Clearing an unrepairable link would remove the recording gate, taking a team from
-        # recording a filtered subset to recording every session. `bool` subclasses `int`, so
-        # without the explicit guard `{"id": true}` would repair the team against flag 1.
-        linked_flag: dict[str, Any]
-        if case == "flag_missing":
-            linked_flag = {"id": 987654321, "key": "replay-gate"}
-        elif case == "missing_id":
-            linked_flag = {"key": "replay-gate"}
-        elif case == "bool_id":
-            linked_flag = {"id": True, "key": "replay-gate"}
-        elif case == "non_numeric_id":
-            linked_flag = {"id": "abc", "key": "replay-gate"}
-        else:
-            flag_team = (
-                self.team if case == "flag_soft_deleted" else Team.objects.create(organization=self.organization)
-            )
-            flag = FeatureFlag.objects.create(
-                team=flag_team,
-                created_by=self.user,
-                key="replay-gate-v2",
-                deleted=case == "flag_soft_deleted",
-            )
-            linked_flag = {"id": flag.id, "key": "replay-gate"}
+        # recording a filtered subset to recording every session.
         self._link_flag(self.team, linked_flag)
 
         # `--live-run` so the row surviving proves the command declined to rewrite it, rather than
@@ -116,6 +83,33 @@ class TestRepairReplayLinkedFlagKeys(BaseTest):
         assert report["unrepairable"][0]["outcome"] == outcome
         self.team.refresh_from_db()
         assert self.team.session_recording_linked_flag == linked_flag
+
+    @parameterized.expand(
+        [
+            ("missing_id", {"key": "replay-gate"}, "malformed"),
+            # `bool` subclasses `int`, so without the explicit guard this would repair against flag 1.
+            ("bool_id", {"id": True, "key": "replay-gate"}, "malformed"),
+            ("non_numeric_id", {"id": "abc", "key": "replay-gate"}, "malformed"),
+            ("flag_missing", {"id": 987654321, "key": "replay-gate"}, "flag_missing"),
+        ]
+    )
+    def test_leaves_malformed_or_dangling_links_alone(
+        self, _name: str, linked_flag: dict[str, Any], outcome: str
+    ) -> None:
+        self._assert_link_survives(linked_flag, outcome)
+
+    @parameterized.expand(
+        [
+            ("flag_soft_deleted", True, True, "flag_soft_deleted"),
+            ("flag_in_other_project", False, False, "flag_in_other_project"),
+        ]
+    )
+    def test_leaves_links_to_unusable_flags_alone(
+        self, _name: str, same_project: bool, deleted: bool, outcome: str
+    ) -> None:
+        flag_team = self.team if same_project else Team.objects.create(organization=self.organization)
+        flag = FeatureFlag.objects.create(team=flag_team, created_by=self.user, key="replay-gate-v2", deleted=deleted)
+        self._assert_link_survives({"id": flag.id, "key": "replay-gate"}, outcome)
 
     def test_repairs_a_sibling_team_linking_another_teams_flag(self) -> None:
         sibling_team = Team.objects.create(organization=self.organization, project=self.team.project)

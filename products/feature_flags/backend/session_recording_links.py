@@ -9,7 +9,8 @@ stale key silently turns replay off for the team rather than surfacing an error 
 from typing import Any
 
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Exists, OuterRef, QuerySet
+from django.db.models.functions import JSONObject
 
 import structlog
 
@@ -22,6 +23,20 @@ from products.feature_flags.backend.models.feature_flag import FeatureFlag
 logger = structlog.get_logger(__name__)
 
 
+def linked_flag_id(linked_flag: Any) -> int | None:
+    """The flag id a stored replay link points at, or None when it holds no usable one."""
+    if not isinstance(linked_flag, dict):
+        return None
+    stored_id = linked_flag.get("id")
+    # The column is schemaless, so anything an API client or the admin's JSON widget sent can be
+    # here. Only an int is usable, and every other shape is left for the caller to handle rather
+    # than coerced. `bool` is excluded explicitly because it subclasses `int`, so `{"id": true}`
+    # would otherwise read as a link to flag 1.
+    if isinstance(stored_id, bool) or not isinstance(stored_id, int):
+        return None
+    return stored_id
+
+
 def teams_linking_flag(feature_flag: FeatureFlag) -> QuerySet[Team]:
     """Every team gating session recording on this flag."""
     # Scoped by project rather than by team: any team in the project can gate recording on a flag
@@ -29,6 +44,18 @@ def teams_linking_flag(feature_flag: FeatureFlag) -> QuerySet[Team]:
     return Team.objects.filter(
         project_id=feature_flag.team.project_id,
         session_recording_linked_flag__contains={"id": feature_flag.id},
+    )
+
+
+def teams_linking_flag_subquery() -> Exists:
+    """`teams_linking_flag` as a correlated subquery, for annotating a `FeatureFlag` queryset."""
+    # Containment never casts, so a non-integer id in the JSON yields False rather than erroring
+    # the query.
+    return Exists(
+        Team.objects.filter(
+            project_id=OuterRef("team__project_id"),
+            session_recording_linked_flag__contains=JSONObject(id=OuterRef("id")),
+        )
     )
 
 
@@ -43,17 +70,7 @@ def replay_linked_flag_ids(project_id: int) -> set[int]:
         .exclude(session_recording_linked_flag__isnull=True)
         .values_list("session_recording_linked_flag", flat=True)
     )
-
-    flag_ids: set[int] = set()
-    for linked_flag in stored:
-        if not isinstance(linked_flag, dict):
-            continue
-        flag_id = linked_flag.get("id")
-        # `bool` subclasses `int` and `True == 1`, so an unchecked `{"id": true}` would read as a
-        # link to flag 1 and block deleting it.
-        if isinstance(flag_id, int) and not isinstance(flag_id, bool):
-            flag_ids.add(flag_id)
-    return flag_ids
+    return {flag_id for linked_flag in stored if (flag_id := linked_flag_id(linked_flag)) is not None}
 
 
 def update_linked_flag_key(team: Team, new_key: str) -> None:

@@ -14237,8 +14237,6 @@ class TestFeatureFlagReplayLinkFollowsRename(APIBaseTest):
     @parameterized.expand([("stored_key_already_matches",), ("links_a_different_flag",)])
     @patch("posthog.models.remote_config._update_team_remote_config")
     def test_rename_does_not_save_teams_it_has_nothing_to_change(self, scope: str, mock_refresh: MagicMock) -> None:
-        # Every team save enqueues a RemoteConfig sync, so a rewrite that changes nothing costs a
-        # write and a Celery task for no benefit.
         flag = FeatureFlag.objects.create(team=self.team, created_by=self.user, key="replay-gate")
         sibling_team = Team.objects.create(organization=self.organization, project=self.team.project)
         if scope == "stored_key_already_matches":

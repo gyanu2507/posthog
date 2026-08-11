@@ -14,7 +14,6 @@ from django.conf import settings
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch, Q, QuerySet, deletion
-from django.db.models.functions import JSONObject
 
 import grpc
 import requests
@@ -105,7 +104,11 @@ from products.feature_flags.backend.models.feature_flag import (
     FeatureFlagDashboards,
     set_feature_flags_for_team_in_cache,
 )
-from products.feature_flags.backend.session_recording_links import replay_linked_flag_ids, teams_linking_flag
+from products.feature_flags.backend.session_recording_links import (
+    replay_linked_flag_ids,
+    teams_linking_flag,
+    teams_linking_flag_subquery,
+)
 from products.feature_flags.backend.types import PropertyFilterType
 from products.feature_flags.backend.user_blast_radius import get_user_blast_radius
 from products.feature_flags.backend.version_history import (
@@ -1898,8 +1901,9 @@ class FeatureFlagSerializer(
             # Check for other flags that depend on this flag
             raise_if_flag_has_dependents(instance, action="delete")
 
-            # Check if flag is used in session replay settings
-            if teams_linking_flag(instance).exists():
+            # Reuses the annotation the queryset already carries, falling back to a query only for
+            # callers that built the serializer with an unannotated instance.
+            if self.get_is_used_in_replay_settings(instance):
                 raise exceptions.ValidationError(
                     "This feature flag is used in session replay settings. Please remove it from replay settings before deleting."
                 )
@@ -2871,8 +2875,6 @@ class FeatureFlagViewSet(
         return self._apply_filters(request.GET.dict(), queryset)
 
     def safely_get_queryset(self, queryset) -> QuerySet:
-        from django.db.models import Exists, OuterRef
-
         from products.early_access_features.backend.models import EarlyAccessFeature
         from products.feature_flags.backend.models.evaluation_context import FeatureFlagEvaluationContext
 
@@ -2903,17 +2905,7 @@ class FeatureFlagViewSet(
             )
         )
 
-        # Matches the containment check in FeatureFlagSerializer.get_is_used_in_replay_settings,
-        # so the annotated and unannotated paths agree. Containment never casts, so a
-        # non-integer id in the JSON yields False instead of erroring the query.
-        queryset = queryset.annotate(
-            is_used_in_replay_settings_annotation=Exists(
-                Team.objects.filter(
-                    project_id=OuterRef("team__project_id"),
-                    session_recording_linked_flag__contains=JSONObject(id=OuterRef("id")),
-                )
-            )
-        )
+        queryset = queryset.annotate(is_used_in_replay_settings_annotation=teams_linking_flag_subquery())
 
         if self.action == "list":
             queryset = (
@@ -3592,8 +3584,6 @@ class FeatureFlagViewSet(
         # Batch query for dependent flags
         dependent_flags_map = find_dependent_flags_batch(flags_list)
 
-        # One query for the whole project rather than a lookup per flag, matching how the checks
-        # above are batched.
         replay_linked_ids = replay_linked_flag_ids(self.project_id)
 
         deleted = []
@@ -3664,8 +3654,8 @@ class FeatureFlagViewSet(
                 )
                 continue
 
-            # Check if the flag gates session replay for a team in the project. Deleting it stops
-            # that team recording, and the tombstone rename below fires no signal to relink them.
+            # Deleting a flag a team gates recording on stops that team recording, and the
+            # tombstone rename below fires no signal to relink them.
             if flag_id in replay_linked_ids:
                 errors.append(
                     {

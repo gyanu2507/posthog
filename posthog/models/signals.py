@@ -11,6 +11,10 @@ is_muted = False
 # 1. Include ModelActivityMixin in the model's inheritance
 # 2. Or override the save method and call this signal manually
 # See FeatureFlag for an example.
+# Not every receiver only writes an activity entry: it is also the one signal carrying a full
+# `before_update`, so some receivers use it for data integrity that depends on the old value
+# (see `products/feature_flags/backend/session_recording_links.py`). Muting a sender through
+# `signal_exclusions` disables those too.
 model_activity_signal = Signal()
 
 # Sent by Team.rotate_secret_token_and_save after the new token is persisted, so
