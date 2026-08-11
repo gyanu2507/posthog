@@ -32,57 +32,49 @@ def teams_linking_flag(feature_flag: FeatureFlag) -> QuerySet[Team]:
     )
 
 
-def update_linked_flag_key(team: Team, expected_flag_id: int, new_key: str) -> None:
-    """Rewrite the stored key on a team's replay link, leaving teams that no longer need it alone."""
-    # Locks the row and re-reads inside the lock, rather than trusting `team`'s in-memory copy:
-    # callers load teams in a batch before looping over them, so another edit to this team's
-    # linked flag could land before its turn comes up. The lock closes the window between the
-    # read and the save below; taking it here is safe because it's the only row this function
-    # locks and the transaction commits before returning, so it can't deadlock against another
-    # call doing the same for a different team (see `relink_teams_on_key_change` for the case
-    # that does require avoiding a lock).
-    with transaction.atomic():
-        linked_flag = (
-            Team.objects.select_for_update()
-            .filter(pk=team.pk)
-            .values_list("session_recording_linked_flag", flat=True)
-            .first()
-        )
-        if not isinstance(linked_flag, dict) or linked_flag.get("id") != expected_flag_id:
-            # Someone pointed the team at a different flag since the caller looked it up; that
-            # edit isn't ours to touch, and this rename has nothing left to fix here.
-            return
-        if linked_flag.get("key") == new_key:
-            # A no-op save would still spend a write, a Celery task, and a RemoteConfig rebuild.
-            return
+def replay_linked_flag_ids(project_id: int) -> set[int]:
+    """Every flag id a team in this project gates session recording on.
 
-        team.session_recording_linked_flag = {**linked_flag, "key": new_key}
-        # Saving the instance rather than issuing a queryset `update()` is what fires the `post_save`
-        # receiver that refreshes the team's RemoteConfig; a bulk update would leave the cached SDK
-        # payload holding the old key.
-        team.save(update_fields=["session_recording_linked_flag"])
+    One query for the whole project, for callers checking many flags at once. `teams_linking_flag`
+    is the per-flag equivalent; calling it in a loop is a query per flag.
+    """
+    stored = (
+        Team.objects.filter(project_id=project_id)
+        .exclude(session_recording_linked_flag__isnull=True)
+        .values_list("session_recording_linked_flag", flat=True)
+    )
+
+    flag_ids: set[int] = set()
+    for linked_flag in stored:
+        if not isinstance(linked_flag, dict):
+            continue
+        flag_id = linked_flag.get("id")
+        # `bool` subclasses `int` and `True == 1`, so an unchecked `{"id": true}` would read as a
+        # link to flag 1 and block deleting it.
+        if isinstance(flag_id, int) and not isinstance(flag_id, bool):
+            flag_ids.add(flag_id)
+    return flag_ids
+
+
+def update_linked_flag_key(team: Team, new_key: str) -> None:
+    """Rewrite the stored key on a team's replay link, leaving teams that already match alone."""
+    linked_flag = team.session_recording_linked_flag
+    if not isinstance(linked_flag, dict) or linked_flag.get("key") == new_key:
+        # A no-op save would still spend a write, a Celery task, and a RemoteConfig rebuild.
+        return
+
+    team.session_recording_linked_flag = {**linked_flag, "key": new_key}
+    # Saving the instance rather than issuing a queryset `update()` is what fires the `post_save`
+    # receiver that refreshes the team's RemoteConfig; a bulk update would leave the cached SDK
+    # payload holding the old key.
+    team.save(update_fields=["session_recording_linked_flag"])
 
 
 def relink_teams(feature_flag: FeatureFlag) -> None:
     """Point every team gating replay on this flag at its current key."""
-    # Reads the key fresh rather than trusting feature_flag.key from the signal: two renames of
-    # the same flag committed close together fire their on_commit callbacks with no ordering
-    # guarantee between them, and update_linked_flag_key's guard only checks the flag id and
-    # whether the key differs - not which rename is newer. A stale callback that reads its key
-    # from memory can overwrite a team a later rename's callback already brought up to date. This
-    # re-read makes every callback converge on whatever key is actually stored, regardless of
-    # which rename triggered it or the order the callbacks run in.
-    current_key = (
-        FeatureFlag.objects_including_soft_deleted.filter(pk=feature_flag.pk).values_list("key", flat=True).first()
-    )
-    if current_key is None:
-        # The row is gone entirely, not just soft-deleted; repair_replay_linked_flag_keys reports
-        # these teams as flag_missing on its next run.
-        return
-
     for team in teams_linking_flag(feature_flag):
         try:
-            update_linked_flag_key(team, feature_flag.id, current_key)
+            update_linked_flag_key(team, feature_flag.key)
         except Exception:
             # This runs after the rename has committed, so raising would fail a request that
             # already succeeded, and the retry would find the key unchanged and skip the relink
