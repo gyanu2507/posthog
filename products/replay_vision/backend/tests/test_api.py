@@ -2834,6 +2834,65 @@ class TestSessionReplayObservationViewSet(_VisionAPITestCase):
         self.assertIsNone(body["next_observation_id"])
 
 
+class TestObservationSearchAction(_VisionAPITestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.scanner = self._create_scanner(name="searchable")
+
+    @property
+    def search_url(self) -> str:
+        return f"/api/environments/{self.team.id}/vision/observations/search/"
+
+    def _create_succeeded_observation(self, session_id: str) -> ReplayObservation:
+        observation = ReplayObservation.objects.create(
+            scanner=self.scanner,
+            session_id=session_id,
+            scanner_snapshot=_snapshot_for(self.scanner),
+            triggered_by=ObservationTrigger.SCHEDULE,
+        )
+        ReplayObservation.objects.filter(pk=observation.id).update(
+            status=ObservationStatus.SUCCEEDED, completed_at=timezone.now()
+        )
+        return observation
+
+    @parameterized.expand([("missing_q", ""), ("limit_above_cap", "?q=checkout&limit=51")])
+    def test_search_rejects_bad_params(self, _name: str, query_string: str) -> None:
+        resp = self.client.get(f"{self.search_url}{query_string}")
+        self.assertEqual(resp.status_code, 400)
+
+    @patch("products.replay_vision.backend.api.observations.rank_observation_ids")
+    @patch("products.replay_vision.backend.api.observations.generate_embedding")
+    def test_search_returns_results_in_rank_order(self, mock_embed: MagicMock, mock_rank: MagicMock) -> None:
+        first = self._create_succeeded_observation("sess-1")
+        second = self._create_succeeded_observation("sess-2")
+        mock_embed.return_value = MagicMock(embedding=[0.1, 0.2])
+        # A ranked id with no readable row must be skipped, not 500 or leak.
+        mock_rank.return_value = [str(second.id), str(uuid7()), str(first.id)]
+
+        resp = self.client.get(f"{self.search_url}?q=confused users")
+
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertEqual([r["id"] for r in resp.json()["results"]], [str(second.id), str(first.id)])
+
+    @patch(
+        "products.replay_vision.backend.api.observations.generate_embedding",
+        side_effect=Exception("embedding service down"),
+    )
+    def test_search_returns_503_when_embedding_unavailable(self, _mock_embed: MagicMock) -> None:
+        resp = self.client.get(f"{self.search_url}?q=anything")
+        self.assertEqual(resp.status_code, 503)
+
+    @patch("products.replay_vision.backend.api.observations.is_ai_data_processing_approved", return_value=False)
+    def test_search_returns_400_when_ai_consent_is_off(self, _mock_consent: MagicMock) -> None:
+        resp = self.client.get(f"{self.search_url}?q=anything")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("AI data processing", resp.json()["detail"])
+
+    def test_search_with_unknown_scanner_returns_404(self) -> None:
+        resp = self.client.get(f"{self.search_url}?q=anything&scanner_id={uuid7()}")
+        self.assertEqual(resp.status_code, 404)
+
+
 class TestReplayScannerEstimateAction(ClickhouseTestMixin, _VisionAPITestCase):
     @property
     def estimate_url(self) -> str:

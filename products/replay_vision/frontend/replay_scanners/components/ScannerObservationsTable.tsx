@@ -16,6 +16,7 @@ import { FilterPill } from '../../components/FilterPill'
 import { NumericRangeFilterPill } from '../../components/NumericRangeFilterPill'
 import { ObservationResultSummary, ObservationStatusTag } from '../../components/ObservationCard'
 import { ObservationRetryButton } from '../../components/ObservationRetryButton'
+import { PersonFilterPill } from '../../components/PersonFilterPill'
 import type { ReplayObservationApi } from '../../generated/api.schemas'
 import { observationDetailUrl } from '../../observations/replayObservationLogic'
 import {
@@ -98,6 +99,8 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
         observationDateFrom,
         observationDateTo,
         observationBackfillFilter,
+        observationSearchQuery,
+        observationSearchActive,
         hasActiveObservationFilters,
         observationDetailLinkParams,
         availableTags,
@@ -120,6 +123,7 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
         setObservationSubjectFilter,
         setObservationDateRange,
         setObservationBackfillFilter,
+        setObservationSearchQuery,
         clearObservationFilters,
         copyAllObservations,
     } = useActions(logic)
@@ -127,7 +131,7 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
     const tagFilterOptions = availableTags.map((tag) => ({ value: tag, label: tag }))
     const scoreScale = scanner?.scanner_type === 'scorer' ? scanner.scanner_config.scale : undefined
 
-    const columns: LemonTableColumns<ReplayObservationApi> = [
+    const baseColumns: LemonTableColumns<ReplayObservationApi> = [
         {
             title: 'Session',
             key: 'session',
@@ -238,6 +242,9 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
         },
     ]
 
+    // Search results are ordered by relevance, so column sorting doesn't apply while a query is active.
+    const columns = observationSearchActive ? baseColumns.map(({ sorter: _sorter, ...column }) => column) : baseColumns
+
     return (
         <div className="space-y-2">
             {/* The one-line toolbar needs ~1120px of viewport, so it only stops wrapping at xl. */}
@@ -254,33 +261,45 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
                     <div className="flex flex-wrap items-center gap-2 xl:flex-nowrap">
                         {(observationStats.total > 0 || hasActiveObservationFilters) && (
                             <>
-                                <LemonInput
-                                    type="search"
-                                    size="small"
-                                    placeholder="Person email"
-                                    value={observationSubjectFilter}
-                                    onChange={setObservationSubjectFilter}
-                                    className="w-full sm:w-56"
-                                />
-                                <DateFilter
-                                    size="small"
-                                    dateFrom={observationDateFrom}
-                                    dateTo={observationDateTo}
-                                    dateOptions={OBSERVATION_DATE_OPTIONS}
-                                    onChange={(dateFrom, dateTo) => setObservationDateRange(dateFrom, dateTo)}
-                                />
-                                <FilterPill<ObservationStatusValue>
-                                    label="Status"
-                                    options={STATUS_OPTIONS}
-                                    value={observationStatusFilter}
-                                    onChange={setObservationStatusFilter}
-                                />
-                                <FilterPill<ObservationTriggeredByValue>
-                                    label="Triggered by"
-                                    options={TRIGGERED_BY_OPTIONS}
-                                    value={observationTriggeredByFilter}
-                                    onChange={setObservationTriggeredByFilter}
-                                />
+                                <Tooltip title="Describe what to look for and results are ranked by how well they match, best first">
+                                    <LemonInput
+                                        type="search"
+                                        size="small"
+                                        placeholder="Search observations"
+                                        value={observationSearchQuery}
+                                        onChange={setObservationSearchQuery}
+                                        className="w-full sm:w-64"
+                                        data-attr="vision-observations-search"
+                                    />
+                                </Tooltip>
+                                {/* These filters don't apply to a relevance-ranked search, so hide them while a query is active. */}
+                                {!observationSearchActive && (
+                                    <>
+                                        <DateFilter
+                                            size="small"
+                                            dateFrom={observationDateFrom}
+                                            dateTo={observationDateTo}
+                                            dateOptions={OBSERVATION_DATE_OPTIONS}
+                                            onChange={(dateFrom, dateTo) => setObservationDateRange(dateFrom, dateTo)}
+                                        />
+                                        <FilterPill<ObservationStatusValue>
+                                            label="Status"
+                                            options={STATUS_OPTIONS}
+                                            value={observationStatusFilter}
+                                            onChange={setObservationStatusFilter}
+                                        />
+                                        <FilterPill<ObservationTriggeredByValue>
+                                            label="Triggered by"
+                                            options={TRIGGERED_BY_OPTIONS}
+                                            value={observationTriggeredByFilter}
+                                            onChange={setObservationTriggeredByFilter}
+                                        />
+                                        <PersonFilterPill
+                                            value={observationSubjectFilter}
+                                            onChange={setObservationSubjectFilter}
+                                        />
+                                    </>
+                                )}
                                 {scannerType === 'monitor' && (
                                     <FilterPill<ObservationVerdictValue>
                                         label="Verdict"
@@ -309,25 +328,26 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
                                         searchable
                                     />
                                 )}
-                                {observationBackfillFilter && (
-                                    // Same secondary/small button the FilterPills next to it render, so
-                                    // the row stays visually uniform. It carries a clear action rather
-                                    // than a dropdown, because this filter arrives from a link and has
-                                    // nothing to choose between.
-                                    <LemonButton
-                                        type="secondary"
-                                        size="small"
-                                        tooltip={`Backfill ${observationBackfillFilter}`}
-                                        sideAction={{
-                                            icon: <IconX />,
-                                            onClick: () => setObservationBackfillFilter(null),
-                                            tooltip: 'Clear backfill filter',
-                                        }}
-                                        data-attr="vision-observations-backfill-filter"
-                                    >
-                                        Backfill {shortBackfillId(observationBackfillFilter)}
-                                    </LemonButton>
-                                )}
+                                {observationBackfillFilter &&
+                                    !observationSearchActive && (
+                                        // Same secondary/small button the FilterPills next to it render, so
+                                        // the row stays visually uniform. It carries a clear action rather
+                                        // than a dropdown, because this filter arrives from a link and has
+                                        // nothing to choose between.
+                                        <LemonButton
+                                            type="secondary"
+                                            size="small"
+                                            tooltip={`Backfill ${observationBackfillFilter}`}
+                                            sideAction={{
+                                                icon: <IconX />,
+                                                onClick: () => setObservationBackfillFilter(null),
+                                                tooltip: 'Clear backfill filter',
+                                            }}
+                                            data-attr="vision-observations-backfill-filter"
+                                        >
+                                            Backfill {shortBackfillId(observationBackfillFilter)}
+                                        </LemonButton>
+                                    )}
                                 <LemonButton
                                     type="tertiary"
                                     size="small"
@@ -338,7 +358,7 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
                                 </LemonButton>
                             </>
                         )}
-                        {scannerType === 'summarizer' && observationStats.total > 0 && (
+                        {scannerType === 'summarizer' && observationStats.total > 0 && !observationSearchActive && (
                             <LemonButton
                                 size="small"
                                 type="secondary"
@@ -377,22 +397,28 @@ export function ScannerObservationsTable({ scannerId }: { scannerId: string }): 
                 dataSource={observations}
                 loading={triggeringOnDemandObservation || observationsLoading}
                 rowKey="id"
-                pagination={{
-                    controlled: true,
-                    pageSize: OBSERVATIONS_PAGE_SIZE,
-                    currentPage: observationsPage,
-                    entryCount: observationsTotal,
-                    onForward: () => setObservationsPage(observationsPage + 1),
-                    onBackward: () => setObservationsPage(observationsPage - 1),
-                }}
-                sorting={observationsSort}
+                pagination={
+                    observationSearchActive
+                        ? undefined
+                        : {
+                              controlled: true,
+                              pageSize: OBSERVATIONS_PAGE_SIZE,
+                              currentPage: observationsPage,
+                              entryCount: observationsTotal,
+                              onForward: () => setObservationsPage(observationsPage + 1),
+                              onBackward: () => setObservationsPage(observationsPage - 1),
+                          }
+                }
+                sorting={observationSearchActive ? null : observationsSort}
                 onSort={(next) => setObservationsSort(next)}
                 useURLForSorting={false}
                 // The URL scheme can't express "no sort", so a third header click would snap back with duplicate fetches.
                 noSortingCancellation
                 nouns={['observation', 'observations']}
                 emptyState={
-                    hasActiveObservationFilters ? (
+                    observationSearchActive ? (
+                        <div className="p-6 text-center text-muted">No observations match your search.</div>
+                    ) : hasActiveObservationFilters ? (
                         <div className="p-6 text-center text-muted">No observations match your filters.</div>
                     ) : (
                         <div className="p-6 flex flex-col items-center gap-3 text-center">
