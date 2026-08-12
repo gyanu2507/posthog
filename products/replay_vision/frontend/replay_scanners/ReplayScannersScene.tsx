@@ -35,6 +35,7 @@ import { IngestionLimitBanner } from '../components/IngestionLimitBanner'
 import { ReplayVisionFeedbackButton } from '../components/ReplayVisionFeedbackButton'
 import { ScannerTypeBadge } from '../components/ScannerTypeBadge'
 import { visionQuotaLogic } from '../logics/visionQuotaLogic'
+import { ObservationSearchTab } from '../search/ObservationSearchTab'
 import { getReplayVisionDeleteDisabledReason, getReplayVisionEditDisabledReason } from '../utils/accessControl'
 import { creditsToUsd, formatCreditCount } from '../utils/credits'
 import { VisionMetrics } from './components/VisionMetrics'
@@ -297,15 +298,18 @@ export function ReplayScannersScene(): JSX.Element {
             />
 
             <LemonTabs
-                activeKey={searchParams.tab === 'usage' ? 'usage' : 'scanners'}
-                onChange={(tab) => push(urls.replayVision(), tab === 'usage' ? { tab } : {})}
+                activeKey={['search', 'usage'].includes(searchParams.tab) ? searchParams.tab : 'scanners'}
+                onChange={(tab) => push(urls.replayVision(), tab === 'scanners' ? {} : { tab })}
                 tabs={[
                     { key: 'scanners', label: 'Scanners', content: <></> },
+                    { key: 'search', label: 'Search', content: <></> },
                     { key: 'usage', label: 'Usage', content: <></> },
                 ]}
             />
 
-            {searchParams.tab === 'usage' ? (
+            {searchParams.tab === 'search' ? (
+                <ObservationSearchTab scannerId={null} />
+            ) : searchParams.tab === 'usage' ? (
                 <VisionUsageTab />
             ) : (
                 <>

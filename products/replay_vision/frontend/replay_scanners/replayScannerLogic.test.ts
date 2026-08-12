@@ -785,65 +785,6 @@ describe('replayScannerLogic', () => {
         })
     })
 
-    describe('semantic search', () => {
-        let scannedLogic: ReturnType<typeof replayScannerLogic.build>
-        let searchSpy: jest.Mock
-
-        beforeEach(() => {
-            searchSpy = jest.fn(() => [200, { results: [{ id: 'obs-2' }, { id: 'obs-1' }] }])
-            useMocks({
-                get: {
-                    '/api/projects/:team/vision/scanners/:id/': () => [
-                        200,
-                        {
-                            id: 'sid',
-                            name: 'm',
-                            scanner_type: 'monitor',
-                            scanner_config: { prompt: 'p' },
-                            sampling_rate: 1,
-                            enabled: true,
-                        },
-                    ],
-                    '/api/projects/:team/vision/scanners/:id/observations/': { results: [], count: 0 },
-                    '/api/projects/:team/vision/observations/search/': searchSpy,
-                },
-            })
-            scannedLogic = replayScannerLogic({ id: 'sid' })
-            scannedLogic.mount()
-        })
-
-        afterEach(() => {
-            scannedLogic?.unmount()
-        })
-
-        it('a query loads ranked results from the search endpoint and clearing returns to the list', async () => {
-            // toFinishAllListeners waits out the debounce breakpoint and the load it dispatches.
-            await expectLogic(scannedLogic, () => {
-                scannedLogic.actions.setObservationSearchQuery('confused users')
-            }).toFinishAllListeners()
-            expect(searchSpy).toHaveBeenCalledTimes(1)
-            expect(scannedLogic.values.observations.map((o) => o.id)).toEqual(['obs-2', 'obs-1'])
-
-            await expectLogic(scannedLogic, () => {
-                scannedLogic.actions.setObservationSearchQuery('')
-            }).toFinishAllListeners()
-            expect(searchSpy).toHaveBeenCalledTimes(1)
-            expect(scannedLogic.values.observations).toEqual([])
-        })
-
-        it('background reloads do not re-run an active search', async () => {
-            await expectLogic(scannedLogic, () => {
-                scannedLogic.actions.setObservationSearchQuery('rage clicks')
-            }).toFinishAllListeners()
-            expect(searchSpy).toHaveBeenCalledTimes(1)
-
-            await expectLogic(scannedLogic, () => {
-                scannedLogic.actions.loadObservations(true)
-            }).toFinishAllListeners()
-            expect(searchSpy).toHaveBeenCalledTimes(1)
-        })
-    })
-
     describe('hasUnsavedChanges', () => {
         it('is false when no original scanner is loaded', () => {
             expect(logic.values.hasUnsavedChanges).toBe(false)

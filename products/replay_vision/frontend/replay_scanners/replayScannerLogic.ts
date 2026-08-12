@@ -31,7 +31,6 @@ import { urls } from 'scenes/urls'
 import { SIDE_PANEL_CONTEXT_KEY, SidePanelSceneContext } from '~/layout/navigation-3000/sidepanel/types'
 
 import {
-    visionObservationsSearchRetrieve,
     visionScannersAffectedCohortCreate,
     visionScannersCreate,
     visionScannersEstimateCreate,
@@ -101,8 +100,6 @@ const OBSERVATION_TRIGGERED_BY_VALUES: readonly ObservationTriggeredByValue[] = 
 const OBSERVATION_VERDICT_VALUES: readonly ObservationVerdictValue[] = ['yes', 'no', 'inconclusive']
 
 export const OBSERVATIONS_PAGE_SIZE = 50
-// The server's MAX_SEARCH_LIMIT; a larger value would 400.
-const OBSERVATION_SEARCH_LIMIT = 50
 // Past this many rows the clipboard is the wrong tool.
 const COPY_ALL_OBSERVATIONS_LIMIT = 500
 
@@ -284,8 +281,6 @@ export interface replayScannerLogicValues {
     observationDetailLinkParams: Record<string, number | string>
     observationMaxScoreFilter: number | null
     observationMinScoreFilter: number | null
-    observationSearchActive: boolean
-    observationSearchQuery: string
     observationStats: ObservationStatusStats
     observationStatsApi: ObservationStatsApi | null
     observationStatsApiLoading: boolean
@@ -424,7 +419,6 @@ export interface replayScannerLogicActions {
         maxScore: number | null
         minScore: number | null
         page: number
-        search: string
         sort: ObservationsSorting | null
         status: ObservationStatusValue[]
         subject: string
@@ -438,7 +432,6 @@ export interface replayScannerLogicActions {
         maxScore: number | null
         minScore: number | null
         page: number
-        search: string
         sort: ObservationsSorting | null
         status: ObservationStatusEnumApi[]
         subject: string
@@ -509,9 +502,6 @@ export interface replayScannerLogicActions {
     ) => {
         maxScore: number | null
         minScore: number | null
-    }
-    setObservationSearchQuery: (value: string) => {
-        value: string
     }
     setObservationStatusFilter: (values: ObservationStatusValue[]) => {
         values: ObservationStatusEnumApi[]
@@ -610,7 +600,6 @@ export interface replayScannerLogicMeta {
         durationValidationError: (scanner: ReplayScanner) => string | null
         hasUnsavedChanges: (scanner: ReplayScanner, originalScanner: ReplayScanner | null) => boolean
         hasObservationsInFlight: (observationStatsApi: ObservationStatsApi | null) => boolean
-        observationSearchActive: (observationSearchQuery: any) => boolean
         hasActiveObservationFilters: (
             observationStatusFilter: ObservationStatusEnumApi[],
             observationTriggeredByFilter: ObservationTriggerEnumApi[],
@@ -621,8 +610,7 @@ export interface replayScannerLogicMeta {
             observationSubjectFilter: string,
             observationDateFrom: string | null,
             observationDateTo: string | null,
-            observationBackfillFilter: string | null,
-            observationSearchActive: any
+            observationBackfillFilter: string | null
         ) => boolean
         observationDetailLinkParams: (
             observationStatusFilter: ObservationStatusEnumApi[],
@@ -692,7 +680,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
         setObservationSubjectFilter: (value: string) => ({ value }),
         setObservationDateRange: (dateFrom: string | null, dateTo: string | null) => ({ dateFrom, dateTo }),
         setObservationBackfillFilter: (value: string | null) => ({ value }),
-        setObservationSearchQuery: (value: string) => ({ value }),
         clearObservationFilters: true,
         restoreObservationsTableState: (state: {
             page: number
@@ -707,7 +694,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
             dateFrom: string | null
             dateTo: string | null
             backfillId: string | null
-            search: string
         }) => state,
         setChartDateRange: (dateFrom: string | null, dateTo: string | null) => ({ dateFrom, dateTo }),
         requestScannerEstimate: true,
@@ -997,7 +983,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 setObservationScoreRange: () => 1,
                 setObservationSubjectFilter: () => 1,
                 setObservationDateRange: () => 1,
-                setObservationSearchQuery: () => 1,
                 setObservationsSort: () => 1,
                 clearObservationFilters: () => 1,
                 restoreObservationsTableState: (_, { page }) => Math.max(1, page),
@@ -1143,14 +1128,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 restoreObservationsTableState: (_, { backfillId }) => backfillId,
             },
         ],
-        observationSearchQuery: [
-            '' as string,
-            {
-                setObservationSearchQuery: (_, { value }) => value,
-                clearObservationFilters: () => '',
-                restoreObservationsTableState: (_, { search }) => search,
-            },
-        ],
         chartDateFrom: ['-14d' as string | null, { setChartDateRange: (_, { dateFrom }) => dateFrom }],
         chartDateTo: [null as string | null, { setChartDateRange: (_, { dateTo }) => dateTo }],
     }),
@@ -1182,10 +1159,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
             (s) => [s.observationStatsApi],
             (stats: ObservationStatsApi | null): boolean => (stats?.status_counts.in_flight ?? 0) > 0,
         ],
-        observationSearchActive: [
-            (s) => [s.observationSearchQuery],
-            (query: string): boolean => query.trim().length > 0,
-        ],
         hasActiveObservationFilters: [
             (s) => [
                 s.observationStatusFilter,
@@ -1198,7 +1171,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 s.observationDateFrom,
                 s.observationDateTo,
                 s.observationBackfillFilter,
-                s.observationSearchActive,
             ],
             (
                 statusFilter: ObservationStatusValue[],
@@ -1210,8 +1182,7 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 subjectFilter: string,
                 dateFrom: string | null,
                 dateTo: string | null,
-                backfillFilter: string | null,
-                searchActive: boolean
+                backfillFilter: string | null
             ): boolean =>
                 statusFilter.length > 0 ||
                 triggeredByFilter.length > 0 ||
@@ -1222,8 +1193,7 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 subjectFilter.trim().length > 0 ||
                 dateFrom !== null ||
                 dateTo !== null ||
-                backfillFilter !== null ||
-                searchActive,
+                backfillFilter !== null,
         ],
         // Carried into observation detail links so server-computed prev/next neighbors honor the table's filters + sort.
         observationDetailLinkParams: [
@@ -1665,7 +1635,7 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 }
             },
 
-            loadObservations: async ({ background }, breakpoint) => {
+            loadObservations: async (_, breakpoint) => {
                 if (props.id === 'new') {
                     actions.loadObservationsSuccess([], 0)
                     return
@@ -1673,42 +1643,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 const teamId = teamLogic.values.currentTeamId
                 if (!teamId) {
                     actions.loadObservationsFailure()
-                    return
-                }
-                const searchQuery = values.observationSearchQuery.trim()
-                if (searchQuery) {
-                    // Ranked results don't need live refresh, and each search call embeds the query again.
-                    if (background) {
-                        return
-                    }
-                    try {
-                        const response = await visionObservationsSearchRetrieve(String(teamId), {
-                            q: searchQuery,
-                            scanner_id: props.id,
-                            limit: OBSERVATION_SEARCH_LIMIT,
-                            ...(values.observationVerdictFilter.length > 0
-                                ? { verdict: values.observationVerdictFilter.join(',') }
-                                : {}),
-                            ...(values.observationTagFilter.length > 0
-                                ? { tags: values.observationTagFilter.join(',') }
-                                : {}),
-                            ...(values.observationMinScoreFilter !== null
-                                ? { min_score: values.observationMinScoreFilter }
-                                : {}),
-                            ...(values.observationMaxScoreFilter !== null
-                                ? { max_score: values.observationMaxScoreFilter }
-                                : {}),
-                        })
-                        breakpoint()
-                        const results = response.results ?? []
-                        actions.loadObservationsSuccess(results, results.length)
-                    } catch (error: any) {
-                        if (error instanceof Error && isBreakpoint(error)) {
-                            throw error
-                        }
-                        lemonToast.error(`Search failed${error?.detail ? `: ${error.detail}` : ''}`)
-                        actions.loadObservationsFailure()
-                    }
                     return
                 }
                 try {
@@ -1752,11 +1686,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 // Free-text search — debounce so typing doesn't fire a request per keystroke.
                 await breakpoint(300)
                 reloadObservationsAndStats()
-            },
-            setObservationSearchQuery: async (_, breakpoint) => {
-                // Every request embeds the query, so debounce harder than the plain-text filters.
-                await breakpoint(500)
-                actions.loadObservations()
             },
             clearObservationFilters: () => reloadObservationsAndStats(),
 
@@ -1811,9 +1740,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
             const sort = values.observationsSort
             next.sort = serializeSortParam(sort, { columnKey: 'created_at', order: -1 })
             Object.assign(next, observationFilterParams(values))
-            if (values.observationSearchQuery.trim()) {
-                next.search = values.observationSearchQuery.trim()
-            }
             return next
         }
         const writeUrl = (): [string, Record<string, string | undefined>] => [
@@ -1838,7 +1764,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
             setObservationDateRange: writeUrl,
             setObservationBackfillFilter: writeUrl,
             setObservationSubjectFilter: writeUrlReplace,
-            setObservationSearchQuery: writeUrlReplace,
             clearObservationFilters: writeUrl,
         }
     }),
@@ -1865,9 +1790,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
             const dateFrom = typeof searchParams.date_from === 'string' ? searchParams.date_from : null
             const dateTo = typeof searchParams.date_to === 'string' ? searchParams.date_to : null
             const backfillId = typeof searchParams.backfill_id === 'string' ? searchParams.backfill_id : null
-            const searchRaw = searchParams.search
-            const search =
-                typeof searchRaw === 'string' ? searchRaw : typeof searchRaw === 'number' ? String(searchRaw) : ''
             const sameAsCurrent =
                 page === values.observationsPage &&
                 sort.columnKey === values.observationsSort?.columnKey &&
@@ -1881,8 +1803,7 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 subject === values.observationSubjectFilter &&
                 dateFrom === values.observationDateFrom &&
                 dateTo === values.observationDateTo &&
-                backfillId === values.observationBackfillFilter &&
-                search === values.observationSearchQuery
+                backfillId === values.observationBackfillFilter
             if (!sameAsCurrent) {
                 actions.restoreObservationsTableState({
                     page,
@@ -1897,7 +1818,6 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                     dateFrom,
                     dateTo,
                     backfillId,
-                    search,
                 })
             }
         },
@@ -1956,7 +1876,6 @@ const TABLE_URL_PARAM_KEYS = [
     'date_from',
     'date_to',
     'backfill_id',
-    'search',
 ] as const
 
 /** Observation-filter params the scanner page reads from the URL; links into the Observations tab build from these keys. */
