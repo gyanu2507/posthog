@@ -199,44 +199,6 @@ export interface hogFlowEditorLogicActions {
                   actions: (
                       | {
                             config: {
-                                cohorts: {
-                                    name?: string | undefined
-                                    percentage: number
-                                }[]
-                            }
-                            created_at?: number | undefined
-                            description: string
-                            filters?:
-                                | {
-                                      actions?: any[] | undefined
-                                      events?: any[] | undefined
-                                      properties?: any[] | undefined
-                                  }
-                                | null
-                                | undefined
-                            id: string
-                            name: string
-                            on_error?: 'abort' | 'continue' | null | undefined
-                            output_variable?:
-                                | {
-                                      key: string
-                                      label?: string | null | undefined
-                                      result_path?: string | null | undefined
-                                      spread?: boolean | null | undefined
-                                  }
-                                | {
-                                      key: string
-                                      label?: string | null | undefined
-                                      result_path?: string | null | undefined
-                                      spread?: boolean | null | undefined
-                                  }[]
-                                | null
-                                | undefined
-                            type: 'random_cohort_branch'
-                            updated_at?: number | undefined
-                        }
-                      | {
-                            config: {
                                 delay_duration: string
                             }
                             created_at?: number | undefined
@@ -303,6 +265,45 @@ export interface hogFlowEditorLogicActions {
                                 | null
                                 | undefined
                             type: 'exit'
+                            updated_at?: number | undefined
+                        }
+                      | {
+                            config: {
+                                cohorts: {
+                                    name?: string | undefined
+                                    percentage: number
+                                }[]
+                                sticky_assignment?: boolean | undefined
+                            }
+                            created_at?: number | undefined
+                            description: string
+                            filters?:
+                                | {
+                                      actions?: any[] | undefined
+                                      events?: any[] | undefined
+                                      properties?: any[] | undefined
+                                  }
+                                | null
+                                | undefined
+                            id: string
+                            name: string
+                            on_error?: 'abort' | 'continue' | null | undefined
+                            output_variable?:
+                                | {
+                                      key: string
+                                      label?: string | null | undefined
+                                      result_path?: string | null | undefined
+                                      spread?: boolean | null | undefined
+                                  }
+                                | {
+                                      key: string
+                                      label?: string | null | undefined
+                                      result_path?: string | null | undefined
+                                      spread?: boolean | null | undefined
+                                  }[]
+                                | null
+                                | undefined
+                            type: 'random_cohort_branch'
                             updated_at?: number | undefined
                         }
                       | {
@@ -993,44 +994,6 @@ export interface hogFlowEditorLogicActions {
                   actions: (
                       | {
                             config: {
-                                cohorts: {
-                                    name?: string | undefined
-                                    percentage: number
-                                }[]
-                            }
-                            created_at?: number | undefined
-                            description: string
-                            filters?:
-                                | {
-                                      actions?: any[] | undefined
-                                      events?: any[] | undefined
-                                      properties?: any[] | undefined
-                                  }
-                                | null
-                                | undefined
-                            id: string
-                            name: string
-                            on_error?: 'abort' | 'continue' | null | undefined
-                            output_variable?:
-                                | {
-                                      key: string
-                                      label?: string | null | undefined
-                                      result_path?: string | null | undefined
-                                      spread?: boolean | null | undefined
-                                  }
-                                | {
-                                      key: string
-                                      label?: string | null | undefined
-                                      result_path?: string | null | undefined
-                                      spread?: boolean | null | undefined
-                                  }[]
-                                | null
-                                | undefined
-                            type: 'random_cohort_branch'
-                            updated_at?: number | undefined
-                        }
-                      | {
-                            config: {
                                 delay_duration: string
                             }
                             created_at?: number | undefined
@@ -1097,6 +1060,45 @@ export interface hogFlowEditorLogicActions {
                                 | null
                                 | undefined
                             type: 'exit'
+                            updated_at?: number | undefined
+                        }
+                      | {
+                            config: {
+                                cohorts: {
+                                    name?: string | undefined
+                                    percentage: number
+                                }[]
+                                sticky_assignment?: boolean | undefined
+                            }
+                            created_at?: number | undefined
+                            description: string
+                            filters?:
+                                | {
+                                      actions?: any[] | undefined
+                                      events?: any[] | undefined
+                                      properties?: any[] | undefined
+                                  }
+                                | null
+                                | undefined
+                            id: string
+                            name: string
+                            on_error?: 'abort' | 'continue' | null | undefined
+                            output_variable?:
+                                | {
+                                      key: string
+                                      label?: string | null | undefined
+                                      result_path?: string | null | undefined
+                                      spread?: boolean | null | undefined
+                                  }
+                                | {
+                                      key: string
+                                      label?: string | null | undefined
+                                      result_path?: string | null | undefined
+                                      spread?: boolean | null | undefined
+                                  }[]
+                                | null
+                                | undefined
+                            type: 'random_cohort_branch'
                             updated_at?: number | undefined
                         }
                       | {
