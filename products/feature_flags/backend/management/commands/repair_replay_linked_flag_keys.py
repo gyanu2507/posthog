@@ -30,6 +30,7 @@ from posthog.models import Team
 from products.feature_flags.backend.models.feature_flag import FeatureFlag
 from products.feature_flags.backend.session_recording_links import (
     STORES_A_REPLAY_GATE,
+    ReplayGateRewrite,
     TriggerGroupFlagRef,
     rewritten_linked_flag,
     rewritten_trigger_groups,
@@ -97,7 +98,7 @@ class _Finding:
     project_id: int
     stored_flag: Any
     group_index: int | _Unset = _UNSET
-    group_id: object | _Unset = _UNSET
+    group_id: Any | _Unset = _UNSET
     flag_id: int | _Unset = _UNSET
     old_key: str | None | _Unset = _UNSET
     new_key: str | _Unset = _UNSET
@@ -203,8 +204,11 @@ class Command(BaseCommand):
         for team in teams:
             if (flag_id := stored_flag_id(team.session_recording_linked_flag)) is not None:
                 flag_ids.add(flag_id)
-            for ref in trigger_group_flag_refs(team.session_recording_trigger_groups):
+            refs = trigger_group_flag_refs(team.session_recording_trigger_groups)
+            if refs:
+                # Only a team that names a flag in a trigger group widens the key probe below.
                 project_ids.add(team.project_id)
+            for ref in refs:
                 if ref.flag_id is not None:
                     flag_ids.add(ref.flag_id)
                 if ref.key is not None:
@@ -237,26 +241,24 @@ class Command(BaseCommand):
         linked = self._scan_linked_flag(team, flags)
         groups = self._scan_trigger_groups(team, flags)
         if not dry_run and (linked.rewrite is not None or groups.rewrite is not None):
-            # Reloaded whole, because the scan holds a `.only(...)` instance and the cache receiver
-            # that `save()` fires reads about thirty other fields, each a separate query when
-            # deferred.
-            fresh = Team.objects.get(pk=team.pk)
-            # A whole-column rewrite computed from the scan would put back anything an admin
-            # changed since, and `save()` republishes that to the SDKs. A team edited mid-run is
-            # left for the next run instead.
-            save_replay_gate_rewrites(
-                fresh,
-                linked_flag=(
-                    linked.rewrite
-                    if fresh.session_recording_linked_flag == team.session_recording_linked_flag
-                    else None
-                ),
-                trigger_groups=(
-                    groups.rewrite
-                    if fresh.session_recording_trigger_groups == team.session_recording_trigger_groups
-                    else None
-                ),
-            )
+            # The findings were classified from the scanned copy, so a column an admin has changed
+            # since is no longer the one this run reported on, and its rewrite would put the
+            # pre-edit column back. Comparing under the lock leaves such a column for the next run.
+            def rewrite(fresh: Team) -> ReplayGateRewrite:
+                return ReplayGateRewrite(
+                    linked_flag=(
+                        linked.rewrite
+                        if fresh.session_recording_linked_flag == team.session_recording_linked_flag
+                        else None
+                    ),
+                    trigger_groups=(
+                        groups.rewrite
+                        if fresh.session_recording_trigger_groups == team.session_recording_trigger_groups
+                        else None
+                    ),
+                )
+
+            save_replay_gate_rewrites(team.pk, rewrite)
         return [*linked.findings, *groups.findings]
 
     def _blocked_by(self, *, flag_id: int, project_id: int, flags: _FlagIndex) -> Outcome | None:
