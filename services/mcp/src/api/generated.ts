@@ -35873,6 +35873,15 @@ export namespace Schemas {
       created_at: string | null;
     }
 
+    export interface FunctionTemplateContent {
+      /** Hog function template the saved step is based on, e.g. 'template-webhook' or 'template-slack'. Must be an existing destination-type template. */
+      template_id: string;
+      /** Input values keyed by the template's inputs_schema keys, e.g. {"url": {"value": "https://..."}}. Inputs marked secret in the template schema are never stored — they are stripped on save and must be re-entered after inserting the template into a workflow. */
+      inputs?: unknown;
+      /** Optional per-event mappings copied into the workflow step along with the inputs. */
+      mappings?: unknown;
+    }
+
     export interface GapAction {
       /**
          * Optional knowledge source to link when accepting.
@@ -45390,12 +45399,14 @@ export namespace Schemas {
     } as const;
 
     export interface MessageTemplateContent {
-      /** Templating language for the email content. Always 'liquid' — Liquid tags pass through verbatim.
+      /** Templating language for the template content. Always 'liquid' — Liquid tags pass through verbatim.
        *
        * * `liquid` - liquid */
       templating?: MessageTemplateContentTemplatingEnum;
       /** Email message content. Replaced as a whole on update — send the complete object. */
       email?: EmailTemplate | null;
+      /** Saved webhook/destination step content. Present for 'function'-type templates. Replaced as a whole on update — send the complete object. */
+      function?: FunctionTemplateContent | null;
     }
 
     export interface MessageTemplate {
@@ -45413,7 +45424,7 @@ export namespace Schemas {
       content?: MessageTemplateContent;
       readonly created_by: UserBasic;
       /**
-         * Message channel of the template. Currently 'email'.
+         * Kind of template: 'email' (a message) or 'function' (a saved webhook/destination step).
          * @maxLength 24
          */
       type?: string;
@@ -57027,7 +57038,7 @@ export namespace Schemas {
       content?: MessageTemplateContent;
       readonly created_by?: UserBasic;
       /**
-         * Message channel of the template. Currently 'email'.
+         * Kind of template: 'email' (a message) or 'function' (a saved webhook/destination step).
          * @maxLength 24
          */
       type?: string;
@@ -87627,6 +87638,10 @@ export namespace Schemas {
      * The initial index from which to return the results.
      */
     offset?: number;
+    /**
+     * Only return templates of this kind: 'email' (messages) or 'function' (saved webhook/destination steps). Omit to return all.
+     */
+    type?: string;
     };
 
     export type MetricsAttributeValuesRetrieveParams = {

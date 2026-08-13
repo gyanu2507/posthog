@@ -433,7 +433,7 @@ export const emailTemplaterLogic = kea<emailTemplaterLogicType>([
             {
                 setActiveContentTab: (_, { tab }) => tab,
                 applyTemplate: (_, { template }) => {
-                    const hasHtml = !!template.content.email.html
+                    const hasHtml = !!template.content.email?.html
                     return hasHtml ? 'visual' : 'plaintext'
                 },
             },
@@ -445,7 +445,7 @@ export const emailTemplaterLogic = kea<emailTemplaterLogicType>([
             [] as MessageTemplate[],
             {
                 loadTemplates: async () => {
-                    const response = await api.messaging.getTemplates()
+                    const response = await api.messaging.getTemplates({ type: 'email' })
                     return response.results
                 },
             },
@@ -672,6 +672,9 @@ export const emailTemplaterLogic = kea<emailTemplaterLogicType>([
 
         applyTemplate: ({ template }) => {
             const emailTemplateContent = template.content.email
+            if (!emailTemplateContent) {
+                return
+            }
             actions.setEmailTemplateValues(emailTemplateContent)
 
             // Load the design into the editor if it's ready and has a design
