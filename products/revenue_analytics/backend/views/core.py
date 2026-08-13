@@ -14,7 +14,7 @@ from products.warehouse_sources.backend.facade.models import ExternalDataSource
 
 @dataclass
 class SourceHandle:
-    type: Literal["events", "stripe"]
+    type: Literal["events", "stripe", "checkoutcom"]
     team: Team
     source: Optional[ExternalDataSource] = None
     event: Optional[RevenueAnalyticsEventItem] = None
