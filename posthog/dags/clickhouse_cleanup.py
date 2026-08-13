@@ -17,7 +17,13 @@ from clickhouse_driver.client import Client
 
 from posthog.clickhouse.cleanup_snapshots import CLEANUP_DELETED_PERSONS_TABLE
 from posthog.clickhouse.client.connection import ClickHouseUser, get_clickhouse_creds
-from posthog.clickhouse.cluster import ClickhouseCluster, LightweightDeleteMutationRunner, NodeRole
+from posthog.clickhouse.cluster import (
+    ClickhouseCluster,
+    LightweightDeleteMutationRunner,
+    MutationNotFound,
+    NodeRole,
+    RetryPolicy,
+)
 from posthog.dags.common import JobOwners
 from posthog.models.async_deletion.delete_cohorts import (
     COHORT_DELETION_MARK_FAILURE_COUNTER,
@@ -334,7 +340,10 @@ def delete_persons(
 
     # person is replicated and not sharded, so a mutation started on one host reaches all of them.
     mutation = cluster.any_host(runner).result()
-    cluster.map_all_hosts(mutation.wait).result()
+    # The mutation entry replicates through Keeper, so a lagged replica can briefly not know it
+    # and raise MutationNotFound; retry the wait like MutationRunner.run_on_shards does.
+    retry_lagged_replicas = RetryPolicy(max_attempts=3, delay=10.0, exceptions=(MutationNotFound,))
+    cluster.map_all_hosts(retry_lagged_replicas(mutation.wait)).result()
 
     return run
 
