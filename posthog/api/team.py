@@ -87,8 +87,6 @@ from posthog.permissions import (
     TeamMemberStrictManagementPermission,
     UserCanCreateProjectPermission,
 )
-from posthog.rbac.access_control_api_mixin import AccessControlSettingsViewSetMixin, AccessControlViewSetMixin
-from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from posthog.scopes import APIScopeObjectOrNotSupported
 from posthog.session_recordings.data_retention import (
     VALID_RETENTION_PERIODS,
@@ -107,6 +105,11 @@ from posthog.utils import (
     safe_cache_set,
 )
 
+from products.access_control.backend.facade.user_access_control import UserAccessControlSerializerMixin
+from products.access_control.backend.facade.viewset_mixins import (
+    AccessControlSettingsViewSetMixin,
+    AccessControlViewSetMixin,
+)
 from products.customer_analytics.backend.facade.team_extension import TeamCustomerAnalyticsConfig
 from products.feature_flags.backend.models.evaluation_context import EvaluationContext, normalize_context_name
 from products.logs.backend.models import TeamLogsConfig

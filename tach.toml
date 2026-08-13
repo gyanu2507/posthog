@@ -1109,6 +1109,7 @@ layer = "modules"
 [[interfaces]]
 expose = [
     "backend\\.facade.*",
+    "backend\\.models\\.access_control.*",
     "backend\\.presentation\\.views.*",
     "backend\\.routes.*",
 ]

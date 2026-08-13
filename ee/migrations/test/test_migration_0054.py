@@ -6,7 +6,8 @@ from django.apps import apps
 
 from parameterized import parameterized
 
-from ee.models.rbac.access_control import AccessControl
+from products.access_control.backend.models.access_control import AccessControl
+
 from ee.models.rbac.role import Role
 
 migration_module = importlib.import_module("ee.migrations.0054_backfill_llm_playground_access_control")

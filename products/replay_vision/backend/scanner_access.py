@@ -9,8 +9,8 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from posthog.models.team import Team
-from posthog.rbac.user_access_control import UserAccessControl
 
+from products.access_control.backend.facade.user_access_control import UserAccessControl
 from products.replay_vision.backend.models.replay_scanner import ReplayScanner
 
 if TYPE_CHECKING:

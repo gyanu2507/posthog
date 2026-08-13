@@ -11,7 +11,7 @@ from posthog.constants import AvailableFeature
 from posthog.models import Team, User
 from posthog.models.organization import OrganizationMembership
 
-from ee.models.rbac.access_control import AccessControl
+from products.access_control.backend.models.access_control import AccessControl
 
 from ...api.skill_serializers import DEFAULT_BODY_PAGE_LENGTH
 from ...api.skill_services import (
@@ -1224,7 +1224,7 @@ class TestLLMSkillAPI(APIBaseTest):
 
 
 # llm_skill is its own access-control resource (see ACCESS_CONTROL_RESOURCES in
-# posthog/rbac/user_access_control.py) - same as TestSkillMarketplaceRBAC in
+# products/access_control/backend/facade/user_access_control.py) - same as TestSkillMarketplaceRBAC in
 # test_marketplace_endpoints.py covers for the git clone endpoint, this covers the JSON skill API.
 class TestSkillAccessControlRBAC(APIBaseTest):
     def setUp(self):

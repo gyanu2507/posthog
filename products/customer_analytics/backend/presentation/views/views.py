@@ -38,9 +38,9 @@ from posthog.helpers.impersonation import is_impersonated
 from posthog.models import OrganizationMembership
 from posthog.models.user import User
 from posthog.permissions import TeamMemberStrictManagementPermission, get_authenticator_scopes, is_service_auth
-from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
-from posthog.rbac.user_access_control import UserAccessControl, model_to_resource
 
+from products.access_control.backend.facade.user_access_control import UserAccessControl, model_to_resource
+from products.access_control.backend.facade.viewset_mixins import AccessControlViewSetMixin
 from products.customer_analytics.backend.facade import api, contracts
 from products.customer_analytics.backend.presentation.views.serializers import (
     AccountChannelSummarySerializer,

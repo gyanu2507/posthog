@@ -11,7 +11,9 @@ from posthog.api.documentation import extend_schema
 from posthog.constants import AvailableFeature
 from posthog.models.organization import OrganizationMembership
 from posthog.models.team.team import Team
-from posthog.rbac.user_access_control import (
+from posthog.scopes import API_SCOPE_OBJECTS, INTERNAL_API_SCOPE_OBJECTS, APIScopeObjectOrNotSupported
+
+from products.access_control.backend.facade.user_access_control import (
     ACCESS_CONTROL_LEVELS_RESOURCE,
     ACCESS_CONTROL_MAX_OBJECTS_PER_RESOURCE,
     RESOURCE_INHERITANCE_MAP,
@@ -23,9 +25,7 @@ from posthog.rbac.user_access_control import (
     minimum_access_level,
     ordered_access_levels,
 )
-from posthog.scopes import API_SCOPE_OBJECTS, INTERNAL_API_SCOPE_OBJECTS, APIScopeObjectOrNotSupported
-
-from ee.models.rbac.access_control import AccessControl
+from products.access_control.backend.models.access_control import AccessControl
 
 if TYPE_CHECKING:
     _GenericViewSet = GenericViewSet

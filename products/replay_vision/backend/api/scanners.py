@@ -29,9 +29,9 @@ from posthog.api.shared import UserBasicSerializer
 from posthog.event_usage import report_user_action
 from posthog.exceptions import QuotaLimitExceeded
 from posthog.models.user import User
-from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
-from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 
+from products.access_control.backend.facade.user_access_control import UserAccessControlSerializerMixin
+from products.access_control.backend.facade.viewset_mixins import AccessControlViewSetMixin
 from products.experiments.backend.models.experiment import Experiment
 from products.replay_vision.backend.api.errors import ReplayVisionErrorSerializer
 from products.replay_vision.backend.api.filters import (

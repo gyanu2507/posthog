@@ -65,8 +65,9 @@ from posthog.errors import CHQueryErrorS3Error, CHQueryErrorS3FileChangedDuringR
 from posthog.exceptions_capture import capture_exception
 from posthog.models.team import Team
 from posthog.models.user import User
-from posthog.rbac.user_access_control import UserAccessControl
 from posthog.settings import HOGQL_INCREASED_MAX_EXECUTION_TIME
+
+from products.access_control.backend.facade.user_access_control import UserAccessControl
 
 tracer = trace.get_tracer(__name__)
 

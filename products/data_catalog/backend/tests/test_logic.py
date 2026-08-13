@@ -219,7 +219,7 @@ class TestCreateFromInsight(BaseTest):
         # exfiltrate a restricted insight's query into the metric definition.
         insight = self._insight()
         with patch(
-            "posthog.rbac.user_access_control.UserAccessControl.check_access_level_for_object",
+            "products.access_control.backend.facade.user_access_control.UserAccessControl.check_access_level_for_object",
             side_effect=lambda obj=None, *a, **k: type(obj).__name__ != "Insight",
         ):
             with self.assertRaises(ValidationError):
@@ -327,7 +327,7 @@ class TestRefreshFromInsight(BaseTest):
             team=self.team, user=self.user, name="mrr", description="d", source_insight_short_id=insight.short_id
         )
         with patch(
-            "posthog.rbac.user_access_control.UserAccessControl.check_access_level_for_object",
+            "products.access_control.backend.facade.user_access_control.UserAccessControl.check_access_level_for_object",
             side_effect=lambda obj=None, *a, **k: type(obj).__name__ != "Insight",
         ):
             with self.assertRaises(ValidationError):

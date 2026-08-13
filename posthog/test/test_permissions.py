@@ -17,10 +17,12 @@ from posthog.models import Organization, Team, User
 from posthog.models.oauth import OAuthAccessToken, OAuthApplication
 from posthog.models.organization import OrganizationMembership
 from posthog.permissions import AccessControlPermission, PostHogFeatureFlagPermission
-from posthog.rbac.user_access_control import UserAccessControl
+
+from products.access_control.backend.facade.user_access_control import UserAccessControl
 
 try:
-    from ee.models.rbac.access_control import AccessControl
+    from products.access_control.backend.models.access_control import AccessControl
+
     from ee.models.rbac.role import Role, RoleMembership
 except ImportError:
     pass

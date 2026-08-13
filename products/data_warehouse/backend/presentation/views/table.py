@@ -20,10 +20,10 @@ from posthog.api.utils import action
 from posthog.exceptions_capture import capture_exception
 from posthog.models import Team
 from posthog.models.user import User
-from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
-from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from posthog.tasks.warehouse import validate_data_warehouse_table_columns
 
+from products.access_control.backend.facade.user_access_control import UserAccessControlSerializerMixin
+from products.access_control.backend.facade.viewset_mixins import AccessControlViewSetMixin
 from products.data_warehouse.backend.facade.api import get_s3_client
 from products.warehouse_sources.backend.facade.api import (
     FILE_FORMAT_READ_HINTS,

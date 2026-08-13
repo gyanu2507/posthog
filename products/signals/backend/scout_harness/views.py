@@ -50,9 +50,9 @@ from posthog.auth import OAuthAccessTokenAuthentication, PersonalAPIKeyAuthentic
 from posthog.models.team.team import Team
 from posthog.models.user import User
 from posthog.permissions import AccessControlPermission, APIScopePermission, get_authenticator_scopes
-from posthog.rbac.user_access_control import UserAccessControl
 from posthog.temporal.common.client import sync_connect
 
+from products.access_control.backend.facade.user_access_control import UserAccessControl
 from products.signals.backend.models import (
     SignalProjectProfile,
     SignalReport,

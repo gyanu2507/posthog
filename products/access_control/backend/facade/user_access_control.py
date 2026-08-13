@@ -29,7 +29,8 @@ else:
 
 
 try:
-    from ee.models.rbac.access_control import AccessControl
+    from products.access_control.backend.models.access_control import AccessControl
+
     from ee.models.rbac.role import RoleMembership
 except ImportError:
     pass

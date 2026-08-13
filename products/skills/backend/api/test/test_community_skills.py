@@ -13,7 +13,7 @@ from ...models.community_skills import CommunitySkill, CommunitySkillFile, Commu
 from ...models.skills import LLMSkill
 
 try:
-    from ee.models.rbac.access_control import AccessControl
+    from products.access_control.backend.models.access_control import AccessControl
 except ImportError:
     pass
 

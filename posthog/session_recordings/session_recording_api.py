@@ -93,8 +93,6 @@ from posthog.rate_limit import (
     is_rate_limit_enabled,
     team_is_allowed_to_bypass_throttle,
 )
-from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
-from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from posthog.session_recordings.ai_data.ai_regex_prompts import AI_REGEX_PROMPTS
 from posthog.session_recordings.ai_data.ai_regex_schema import AiRegexSchema
 from posthog.session_recordings.models.session_recording import SessionRecording
@@ -122,6 +120,8 @@ from posthog.temporal.session_replay.session_summary.workflow import (
     execute_summarize_session_video_stream,
 )
 
+from products.access_control.backend.facade.user_access_control import UserAccessControlSerializerMixin
+from products.access_control.backend.facade.viewset_mixins import AccessControlViewSetMixin
 from products.replay.backend.models.team_session_summaries_config import TeamSessionSummariesConfig
 
 from ee.hogai.session_summaries.llm.call import get_openai_client

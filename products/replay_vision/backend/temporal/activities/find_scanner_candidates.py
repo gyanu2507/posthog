@@ -8,8 +8,7 @@ from temporalio.exceptions import ApplicationError
 
 from posthog.schema import RecordingsQuery
 
-from posthog.rbac.user_access_control import UserAccessControl
-
+from products.access_control.backend.facade.user_access_control import UserAccessControl
 from products.replay_vision.backend.models.replay_observation import ReplayObservation
 from products.replay_vision.backend.models.replay_scanner import SETTLE_INTERVAL, ReplayScanner
 from products.replay_vision.backend.queries.scanner_candidate_query import (
