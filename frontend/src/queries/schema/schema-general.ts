@@ -8957,6 +8957,7 @@ export const externalDataSources = [
     'RakutenAdvertising',
     'Zitadel',
     'DeelFlows',
+    'GoogleTagManager',
 ] as const
 
 export type ExternalDataSourceType = (typeof externalDataSources)[number]
