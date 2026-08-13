@@ -84,6 +84,7 @@ export default defineConfig(({ mode }) => {
                 '@tiptap/react': resolve(__dirname, 'node_modules/@tiptap/react'),
                 '@tiptap/pm': resolve(__dirname, 'node_modules/@tiptap/pm'),
                 '@tiptap/extension-placeholder': resolve(__dirname, 'node_modules/@tiptap/extension-placeholder'),
+                '@posthog/llm-normalizer': resolve(__dirname, 'node_modules/@posthog/llm-normalizer'),
                 products: resolve(__dirname, '../products'),
                 '@posthog/shared-onboarding': resolve(__dirname, '../docs/onboarding'),
                 '@posthog/shared-onboarding/*': resolve(__dirname, '../docs/onboarding/*'),
