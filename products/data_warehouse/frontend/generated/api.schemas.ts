@@ -2760,6 +2760,7 @@ export interface CredentialApi {
  * * `Depot` - Depot
  * * `Schematic` - Schematic
  * * `Dokploy` - Dokploy
+ * * `GoogleTagManager` - GoogleTagManager
  */
 export type ExternalDataSourceTypeEnumApi =
     (typeof ExternalDataSourceTypeEnumApi)[keyof typeof ExternalDataSourceTypeEnumApi]
@@ -4060,6 +4061,7 @@ export const ExternalDataSourceTypeEnumApi = {
     Depot: 'Depot',
     Schematic: 'Schematic',
     Dokploy: 'Dokploy',
+    GoogleTagManager: 'GoogleTagManager',
 } as const
 
 export interface SimpleExternalDataSourceSerializersApi {
