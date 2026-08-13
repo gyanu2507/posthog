@@ -671,6 +671,7 @@ export interface sourceCatalogLogicMeta {
                       | 'GooglePlayConsole'
                       | 'GoogleSearchConsole'
                       | 'GoogleSheets'
+                      | 'GoogleTagManager'
                       | 'GoogleTasks'
                       | 'GoogleWebfonts'
                       | 'GoogleWorkspaceAdminReports'
