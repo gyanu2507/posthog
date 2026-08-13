@@ -376,18 +376,3 @@ def clickhouse_deletion_sweep_job():
     drop_snapshot_assets(
         delete_persons(load_and_verify_deleted_persons_dictionary(build_deleted_persons_dictionary(run)))
     )
-
-
-clickhouse_deletion_sweep_schedule = dagster.ScheduleDefinition(
-    job=clickhouse_deletion_sweep_job,
-    cron_schedule=settings.CLICKHOUSE_DELETION_SWEEP_SCHEDULE,
-    execution_timezone="UTC",
-    name="clickhouse_deletion_sweep_schedule",
-    # Enabled on registration. This PR deletes the Celery schedules that were doing this work, and
-    # a schedule that never fires raises no alert, so leaving it stopped would end weekly
-    # hard-deletion silently.
-    default_status=dagster.DefaultScheduleStatus.RUNNING,
-    # The schedule is the only launch that deletes. dry_run defaults to true, so an ad-hoc run from
-    # the Dagster UI reports what it would remove rather than removing it.
-    run_config={"ops": {"clear_removed_cohort_data": {"config": {"dry_run": False}}}},
-)

@@ -54,7 +54,6 @@ defs = dagster.Definitions(
         part_breaker.break_oversized_parts,
     ],
     schedules=[
-        clickhouse_cleanup.clickhouse_deletion_sweep_schedule,
         export_query_log_archive_to_s3.query_log_archive_export_schedule,
         person_overrides.squash_schedule,
         postgres_to_clickhouse_etl.postgres_to_clickhouse_hourly_schedule,

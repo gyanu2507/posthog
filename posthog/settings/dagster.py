@@ -20,9 +20,6 @@ CLICKHOUSE_INCREMENTAL_BACKUP_SCHEDULE: str = os.getenv("CLICKHOUSE_INCREMENTAL_
 SQUASH_PERSON_OVERRIDES_SCHEDULE: str = os.getenv(
     "SQUASH_PERSON_OVERRIDES_SCHEDULE", "0 22 * * 6"
 )  # At 22:00 (10 PM) on Saturday
-CLICKHOUSE_DELETION_SWEEP_SCHEDULE: str = os.getenv(
-    "CLICKHOUSE_DELETION_SWEEP_SCHEDULE", "0 5 * * SUN"
-)  # At 05:00 on Sunday, the cadence the sweeps have always run at
 DAGSTER_DOMAIN: str | None = os.getenv("DAGSTER_DOMAIN")
 
 DAGSTER_UI_HOST: str = os.getenv("DAGSTER_UI_HOST", "localhost")
