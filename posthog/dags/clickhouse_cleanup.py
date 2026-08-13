@@ -53,6 +53,10 @@ REVIVED_DISTINCT_ID_COUNTER = Counter(
 
 PG_CLEANUP_QUEUE_TABLE = "person_pg_cleanup_queue"
 
+# How many queued persons travel per ClickHouse read and per Postgres upsert transaction. Bounds
+# the op's memory to one page however large the snapshot is.
+PERSIST_PAGE_SIZE = 50_000
+
 # Team ranges are cut so each batch reads a contiguous slice of the sort key. team_id leads
 # ORDER BY on both tables, so the primary index prunes granules outside the range, and the
 # total read across batches stays close to a single scan of the candidate teams.
@@ -851,26 +855,38 @@ def persist_deleted_persons(
         context.log.info("dry run: skipping the write to %s", PG_CLEANUP_QUEUE_TABLE)
         return run
 
-    def read_persons(client: Client) -> list[tuple[int, str]]:
+    def read_page(client: Client, after: tuple[int, str] | None) -> list[tuple[int, str]]:
         # Reads the snapshot directly rather than the dictionary's query, so adding attributes to
-        # the dictionary cannot silently change the shape of what gets queued.
+        # the dictionary cannot silently change the shape of what gets queued. Keyset pagination
+        # over (team_id, person_id) follows the table's sort key, and DISTINCT collapses the
+        # duplicate versions a retried snapshot insert can leave in the ReplacingMergeTree.
+        page_filter = "AND (team_id, person_id) > (%(after_team)s, toUUID(%(after_person)s))" if after else ""
         return client.execute(
             f"""
-            SELECT team_id, person_id FROM {run.persons.qualified_name}
+            SELECT DISTINCT team_id, person_id FROM {run.persons.qualified_name}
             WHERE run_id = %(run_id)s
               AND (team_id, person_id) NOT IN ({run.revived.run_keys_query})
+              {page_filter}
+            ORDER BY team_id, person_id
+            LIMIT %(limit)s
             """,
-            {"run_id": run.persons.run_id},
+            {
+                "run_id": run.persons.run_id,
+                "limit": PERSIST_PAGE_SIZE,
+                "after_team": after[0] if after else 0,
+                "after_person": after[1] if after else "",
+            },
         )
 
-    rows = cluster.any_host_by_role(read_persons, NodeRole.DATA).result()
     deleted_at = run.distinct_ids_deleted_at
-
     written = 0
+    after: tuple[int, str] | None = None
     with persons_database.cursor() as cursor:
         cursor.execute("SET application_name = 'clickhouse_cleanup'")
-        for start in range(0, len(rows), 10_000):
-            chunk = rows[start : start + 10_000]
+        while True:
+            page = cluster.any_host_by_role(partial(read_page, after=after), NodeRole.DATA).result()
+            if not page:
+                break
             # A person can be deleted, drained, re-created and deleted again under the same uuid,
             # and the drain only looks at rows where cleaned_at is null. Leaving an already-cleaned
             # row untouched would drop that second deletion on the floor and leak its Postgres rows
@@ -884,11 +900,19 @@ def persist_deleted_persons(
                 ON CONFLICT (team_id, person_uuid) DO UPDATE
                 SET deleted_at = EXCLUDED.deleted_at, cleaned_at = NULL
                 """,
-                [(team_id, str(person_id), deleted_at) for team_id, person_id in chunk],
+                [(team_id, str(person_id), deleted_at) for team_id, person_id in page],
+                # One statement per page, so rowcount is the whole page rather than the last
+                # sub-batch of psycopg2's default 100-row paging.
+                page_size=len(page),
             )
-            # rowcount, not the chunk size: it counts rows actually inserted or re-armed.
             written += cursor.rowcount
-    persons_database.commit()
+            # Commit per page: the upsert makes replays idempotent, and one transaction across
+            # millions of rows would hold WAL and xmin on the persons writer for the whole op.
+            persons_database.commit()
+            if len(page) < PERSIST_PAGE_SIZE:
+                break
+            last_team, last_person = page[-1]
+            after = (last_team, str(last_person))
 
     context.add_output_metadata({"queued_for_postgres": dagster.MetadataValue.int(written)})
     return run

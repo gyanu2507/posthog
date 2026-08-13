@@ -303,6 +303,19 @@ def test_queues_the_deleted_persons_for_postgres(cluster: ClickhouseCluster, per
 
 
 @pytest.mark.django_db
+def test_queues_every_person_across_page_boundaries(cluster: ClickhouseCluster, persons_database, monkeypatch):
+    # The handoff pages its ClickHouse read by keyset and commits per page; an off-by-one at a
+    # page edge, or stopping after a full page that happened to be the last, silently drops
+    # persons from the queue and leaks their Postgres rows forever.
+    monkeypatch.setattr(clickhouse_cleanup, "PERSIST_PAGE_SIZE", 2)
+    expected = sorted(create_person(team_id=TEAM_ID, version=0, is_deleted=True) for _ in range(5))
+
+    run_job(cluster, persons_database)
+
+    assert sorted(str(row[1]) for row in queued_rows(persons_database)) == expected
+
+
+@pytest.mark.django_db
 def test_requeues_a_person_the_drain_already_cleaned(cluster: ClickhouseCluster, persons_database):
     # A person can be deleted, drained, then re-created and deleted again under the same uuid. The
     # drain only reads rows where cleaned_at is null, so leaving the cleaned row untouched would
