@@ -38,6 +38,7 @@ from products.replay_vision.backend.models.vision_action import VisionAction
 from products.replay_vision.backend.queries import SAVE_ESTIMATE_BUDGET
 from products.replay_vision.backend.queries.scanner_candidate_query import SETTLE_INTERVAL
 from products.replay_vision.backend.quota import BillingPeriod, _current_period_bounds
+from products.replay_vision.backend.search import ObservationMatch
 from products.replay_vision.backend.temporal.constants import (
     APPLY_SCANNER_EXECUTION_TIMEOUT,
     APPLY_SCANNER_WORKFLOW_NAME,
@@ -2860,19 +2861,26 @@ class TestObservationSearchAction(_VisionAPITestCase):
         resp = self.client.get(f"{self.search_url}{query_string}")
         self.assertEqual(resp.status_code, 400)
 
-    @patch("products.replay_vision.backend.api.observations.rank_observation_ids")
+    @patch("products.replay_vision.backend.api.observations.rank_observations")
     @patch("products.replay_vision.backend.api.observations.generate_embedding")
     def test_search_returns_results_in_rank_order(self, mock_embed: MagicMock, mock_rank: MagicMock) -> None:
         first = self._create_succeeded_observation("sess-1")
         second = self._create_succeeded_observation("sess-2")
         mock_embed.return_value = MagicMock(embedding=[0.1, 0.2])
         # A ranked id with no readable row must be skipped, not 500 or leak.
-        mock_rank.return_value = [str(second.id), str(uuid7()), str(first.id)]
+        mock_rank.return_value = [
+            ObservationMatch(observation_id=str(second.id), distance=0.1),
+            ObservationMatch(observation_id=str(uuid7()), distance=0.2),
+            ObservationMatch(observation_id=str(first.id), distance=0.3),
+        ]
 
         resp = self.client.get(f"{self.search_url}?q=confused users")
 
         self.assertEqual(resp.status_code, 200, resp.json())
-        self.assertEqual([r["id"] for r in resp.json()["results"]], [str(second.id), str(first.id)])
+        self.assertEqual(
+            [(r["observation"]["id"], r["distance"]) for r in resp.json()["results"]],
+            [(str(second.id), 0.1), (str(first.id), 0.3)],
+        )
 
     @patch(
         "products.replay_vision.backend.api.observations.generate_embedding",

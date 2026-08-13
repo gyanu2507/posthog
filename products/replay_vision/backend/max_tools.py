@@ -57,7 +57,7 @@ from products.replay_vision.backend.search import (
     DEFAULT_SEARCH_LIMIT,
     MAX_SEARCH_LIMIT,
     ObservationSearchFilters,
-    rank_observation_ids,
+    rank_observations,
 )
 from products.replay_vision.backend.tag_suggestions import suggest_classifier_tags
 from products.replay_vision.backend.temporal.metrics import record_scanner_limit_reached
@@ -503,7 +503,10 @@ class SearchReplayVisionObservationsTool(ReplayVisionGatesMixin, MaxTool):
 
         # Filter + rank in one ClickHouse query: the structured outcome filters run against the embedding
         # metadata, so the semantic ranking only ever sees recordings that already match the exact outcome.
-        ordered_ids = rank_observation_ids(self._team, self._user, scanner_ids, query_vector, capped_limit, filters)
+        ordered_ids = [
+            match.observation_id
+            for match in rank_observations(self._team, self._user, scanner_ids, query_vector, capped_limit, filters)
+        ]
         if not ordered_ids:
             return empty
 

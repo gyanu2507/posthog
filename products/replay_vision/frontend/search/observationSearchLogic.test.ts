@@ -6,13 +6,21 @@ import { urls } from 'scenes/urls'
 import { useMocks } from '~/mocks/jest'
 import { initKeaTests } from '~/test/init'
 
+import type { ObservationSearchResultApi } from '../generated/api.schemas'
 import { observationSearchLogic } from './observationSearchLogic'
+
+function searchResults(distances: number[]): ObservationSearchResultApi[] {
+    return distances.map(
+        (distance, index) =>
+            ({ observation: { id: `obs-${index}` }, distance }) as unknown as ObservationSearchResultApi
+    )
+}
 
 describe('observationSearchLogic', () => {
     let searchSpy: jest.Mock
 
     beforeEach(() => {
-        searchSpy = jest.fn(() => [200, { results: [{ id: 'obs-1' }] }])
+        searchSpy = jest.fn(() => [200, { results: [{ observation: { id: 'obs-1' }, distance: 0.1 }] }])
         useMocks({
             get: {
                 '/api/projects/:team/vision/observations/search/': searchSpy,
@@ -34,7 +42,20 @@ describe('observationSearchLogic', () => {
         const requestUrl = new URL(searchSpy.mock.calls[0][0].request.url)
         expect(requestUrl.searchParams.get('q')).toBe('confused users')
         expect(requestUrl.searchParams.get('scanner_id')).toBe(expectedScope)
-        expect(logic.values.results?.map((r: { id: string }) => r.id)).toEqual(['obs-1'])
+        expect(logic.values.results?.map((r) => r.observation.id)).toEqual(['obs-1'])
+        logic.unmount()
+    })
+
+    it.each([
+        ['spread distances tag the top tier', [0.1, 0.12, 0.4], expect.closeTo(0.15)],
+        ['clustered distances tag nothing', [0.1, 0.12, 0.14], null],
+        ['a single result tags nothing', [0.2], null],
+    ])('%s', (_name, distances, expectedCutoff) => {
+        const logic = observationSearchLogic({ scannerId: null })
+        logic.mount()
+        logic.actions.searchSuccess(searchResults(distances), 'query')
+
+        expect(logic.values.strongMatchDistanceCutoff).toEqual(expectedCutoff)
         logic.unmount()
     })
 

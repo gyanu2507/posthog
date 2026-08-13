@@ -42,6 +42,14 @@ _TAGS_FILTER_CLAUSE = (
 
 
 @dataclass(frozen=True)
+class ObservationMatch:
+    """One ranked search hit: the observation id and its cosine distance to the query (lower is closer)."""
+
+    observation_id: str
+    distance: float
+
+
+@dataclass(frozen=True)
 class ObservationSearchFilters:
     """Exact-outcome filters, applied inside the ClickHouse ranking query against the embedding metadata
     (monitor `verdict`, scorer `score`, classifier `tags` are stamped onto each embedding row at write time)."""
@@ -114,15 +122,15 @@ class ObservationSearchFilters:
         clauses.append(clause)
 
 
-def rank_observation_ids(
+def rank_observations(
     team: Team,
     user: User,
     scanner_ids: list[str],
     query_vector: list[float],
     limit: int,
     filters: ObservationSearchFilters,
-) -> list[str]:
-    """Closest observation ids by cosine distance, restricted to the given scanners — and to the structured
+) -> list[ObservationMatch]:
+    """Closest observations by cosine distance, restricted to the given scanners — and to the structured
     outcome filters — via the embedding metadata, so filter and rank happen in a single query.
 
     `min(...)` collapses an observation's multiple renderings (the summarizer's per-facet rows) to its
@@ -171,7 +179,7 @@ def rank_observation_ids(
         placeholders=placeholders,
         ch_user=ClickHouseUser.REPLAY_VISION,
     )
-    return [row[0] for row in (result.results or [])]
+    return [ObservationMatch(observation_id=row[0], distance=row[1]) for row in (result.results or [])]
 
 
 def fetch_ranked_observations(team_id: int, scanner_ids: list[str], ordered_ids: list[str]) -> list[ReplayObservation]:

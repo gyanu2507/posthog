@@ -46625,9 +46625,16 @@ export namespace Schemas {
       readonly created_at: string;
     }
 
+    export interface ObservationSearchResult {
+      /** The matching observation. */
+      observation: ReplayObservation;
+      /** Cosine distance between the search text and the observation's closest embedding; lower is a closer match. Only comparable to other results in the same response. */
+      distance: number;
+    }
+
     export interface ObservationSearchResponse {
       /** Matching observations, most relevant first. */
-      results: ReplayObservation[];
+      results: ObservationSearchResult[];
     }
 
     export interface ObservationStatusCounts {

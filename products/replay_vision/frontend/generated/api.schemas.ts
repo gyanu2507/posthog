@@ -697,9 +697,16 @@ export interface RetryResponseApi {
     workflow_id: string
 }
 
+export interface ObservationSearchResultApi {
+    /** The matching observation. */
+    observation: ReplayObservationApi
+    /** Cosine distance between the search text and the observation's closest embedding; lower is a closer match. Only comparable to other results in the same response. */
+    distance: number
+}
+
 export interface ObservationSearchResponseApi {
     /** Matching observations, most relevant first. */
-    results: ReplayObservationApi[]
+    results: ObservationSearchResultApi[]
 }
 
 export interface VisionQuotaApi {

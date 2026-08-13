@@ -1,23 +1,29 @@
+import clsx from 'clsx'
 import { useActions, useValues } from 'kea'
 
 import { IconSearch } from '@posthog/icons'
-import { LemonButton, LemonInput, Link, Spinner } from '@posthog/lemon-ui'
+import { LemonButton, LemonInput, LemonTag, Link, Spinner } from '@posthog/lemon-ui'
 
 import { TZLabel } from 'lib/components/TZLabel'
 import { urls } from 'scenes/urls'
 
 import { ObservationResultSummary } from '../components/ObservationCard'
 import { ScannerTypeBadge } from '../components/ScannerTypeBadge'
-import type { ReplayObservationApi } from '../generated/api.schemas'
-import { observationSearchLogic } from './observationSearchLogic'
+import type { ObservationSearchResultApi } from '../generated/api.schemas'
+import { SEARCH_RESULT_LIMIT, observationSearchLogic } from './observationSearchLogic'
+
+const EXAMPLE_QUERIES = ['users confused by pricing', 'abandoned checkout after an error']
 
 function SearchResultCard({
-    observation,
+    result,
     showScanner,
+    strongMatch,
 }: {
-    observation: ReplayObservationApi
+    result: ObservationSearchResultApi
     showScanner: boolean
+    strongMatch: boolean
 }): JSX.Element {
+    const observation = result.observation
     const snapshot = observation.scanner_snapshot
     return (
         <Link
@@ -36,7 +42,12 @@ function SearchResultCard({
                 {observation.recording_subject_email && (
                     <span className="text-xs text-muted truncate">{observation.recording_subject_email}</span>
                 )}
-                <span className="ml-auto shrink-0 text-xs text-muted">
+                <span className="ml-auto shrink-0 flex items-center gap-2 text-xs text-muted">
+                    {strongMatch && (
+                        <LemonTag type="success" size="small">
+                            Strong match
+                        </LemonTag>
+                    )}
                     <TZLabel time={observation.created_at} />
                 </span>
             </div>
@@ -47,13 +58,13 @@ function SearchResultCard({
 
 export function ObservationSearchTab({ scannerId }: { scannerId: string | null }): JSX.Element {
     const logic = observationSearchLogic({ scannerId })
-    const { query, results, searching, searchedQuery } = useValues(logic)
+    const { query, results, searching, searchedQuery, strongMatchDistanceCutoff } = useValues(logic)
     const { setQuery, search } = useActions(logic)
     const crossScanner = scannerId === null
 
     return (
         <div className="max-w-3xl mx-auto flex flex-col gap-4 pt-2">
-            <div className="flex gap-2 w-[40rem] max-w-full">
+            <div className="flex gap-2 w-[40rem] max-w-full mx-auto">
                 <LemonInput
                     type="search"
                     fullWidth
@@ -76,38 +87,67 @@ export function ObservationSearchTab({ scannerId }: { scannerId: string | null }
                 </LemonButton>
             </div>
 
-            {searching ? (
-                <div className="flex items-center justify-center h-40">
-                    <Spinner className="text-2xl" />
-                </div>
-            ) : results === null ? (
-                <div className="text-center text-muted pt-8 flex flex-col gap-1">
-                    <div>
-                        {crossScanner
-                            ? 'Search everything your scanners have observed, ranked by how well it matches.'
-                            : 'Search everything this scanner has observed, ranked by how well it matches.'}
+            {results === null ? (
+                searching ? (
+                    <div className="flex items-center justify-center h-40">
+                        <Spinner className="text-2xl" />
                     </div>
-                    <div>Try "users confused by pricing" or "abandoned checkout after an error".</div>
-                </div>
-            ) : results.length === 0 ? (
-                <div className="text-center text-muted pt-8">
-                    No matches for "{searchedQuery}". Only sessions a scanner has analyzed are searchable.
-                </div>
+                ) : (
+                    <div className="text-center text-muted pt-8 flex flex-col gap-3">
+                        <div>
+                            {crossScanner
+                                ? 'Search everything your scanners have observed, ranked by how well it matches.'
+                                : 'Search everything this scanner has observed, ranked by how well it matches.'}
+                        </div>
+                        <div className="flex items-center justify-center gap-2 flex-wrap">
+                            <span>Try</span>
+                            {EXAMPLE_QUERIES.map((example) => (
+                                <LemonButton
+                                    key={example}
+                                    type="secondary"
+                                    size="small"
+                                    onClick={() => {
+                                        setQuery(example)
+                                        search()
+                                    }}
+                                    data-attr="vision-search-example"
+                                >
+                                    {example}
+                                </LemonButton>
+                            ))}
+                        </div>
+                    </div>
+                )
             ) : (
-                <>
-                    <div className="text-muted text-sm">
-                        {results.length === 1 ? '1 match' : `${results.length} matches`}, best first
-                    </div>
-                    <div className="flex flex-col gap-2">
-                        {results.map((observation) => (
-                            <SearchResultCard
-                                key={observation.id}
-                                observation={observation}
-                                showScanner={crossScanner}
-                            />
-                        ))}
-                    </div>
-                </>
+                // Keep the previous results visible (dimmed) while a new search runs, instead of flashing a spinner.
+                <div className={clsx('flex flex-col gap-4', searching && 'opacity-50 pointer-events-none')}>
+                    {results.length === 0 ? (
+                        <div className="text-center text-muted pt-8">
+                            No matches for "{searchedQuery}". Only sessions a scanner has analyzed are searchable.
+                        </div>
+                    ) : (
+                        <>
+                            <div className="text-muted text-sm">
+                                {results.length >= SEARCH_RESULT_LIMIT
+                                    ? `Showing the top ${SEARCH_RESULT_LIMIT} matches, best first`
+                                    : `${results.length === 1 ? '1 match' : `${results.length} matches`}, best first`}
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                {results.map((result) => (
+                                    <SearchResultCard
+                                        key={result.observation.id}
+                                        result={result}
+                                        showScanner={crossScanner}
+                                        strongMatch={
+                                            strongMatchDistanceCutoff !== null &&
+                                            result.distance <= strongMatchDistanceCutoff
+                                        }
+                                    />
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </div>
             )}
         </div>
     )

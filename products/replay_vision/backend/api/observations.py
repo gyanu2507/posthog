@@ -65,7 +65,7 @@ from products.replay_vision.backend.search import (
     MAX_SEARCH_LIMIT,
     ObservationSearchFilters,
     fetch_ranked_observations,
-    rank_observation_ids,
+    rank_observations,
 )
 from products.replay_vision.backend.temporal.scanners.monitor import MonitorVerdict
 from products.replay_vision.backend.temporal.types import ScannerResult, ScannerSnapshot
@@ -82,7 +82,6 @@ class EmbeddingUnavailableError(APIException):
         "Search is unavailable right now because the embedding service didn't respond. Try again in a moment."
     )
     default_code = "embedding_unavailable"
-
 
 
 class ScannerSnapshotSerializer(serializers.Serializer):
@@ -1100,8 +1099,16 @@ class ObservationSearchQuerySerializer(serializers.Serializer):
     )
 
 
+class ObservationSearchResultSerializer(serializers.Serializer):
+    observation = ReplayObservationSerializer(help_text="The matching observation.")
+    distance = serializers.FloatField(
+        help_text="Cosine distance between the search text and the observation's closest embedding; lower is a "
+        "closer match. Only comparable to other results in the same response.",
+    )
+
+
 class ObservationSearchResponseSerializer(serializers.Serializer):
-    results = ReplayObservationSerializer(many=True, help_text="Matching observations, most relevant first.")
+    results = ObservationSearchResultSerializer(many=True, help_text="Matching observations, most relevant first.")
 
 
 def _csv_values(raw: str | None) -> list[str] | None:
@@ -1174,7 +1181,7 @@ class SessionReplayObservationViewSet(ReplayObservationViewSet):
         validated = params.validated_data
 
         scanner_ids = self._searchable_scanner_ids(validated.get("scanner_id"))
-        results: list[ReplayObservation] = []
+        results: list[dict[str, Any]] = []
         if scanner_ids:
             # Gate before the embedding call so an opted-out org gets an actionable 400, not an opaque failure.
             if not is_ai_data_processing_approved(self.team.id):
@@ -1196,7 +1203,7 @@ class SessionReplayObservationViewSet(ReplayObservationViewSet):
                 min_score=validated.get("min_score"),
                 max_score=validated.get("max_score"),
             )
-            ordered_ids = rank_observation_ids(
+            matches = rank_observations(
                 self.team,
                 cast(User, request.user),
                 scanner_ids,
@@ -1204,7 +1211,11 @@ class SessionReplayObservationViewSet(ReplayObservationViewSet):
                 validated["limit"],
                 filters,
             )
-            results = fetch_ranked_observations(self.team_id, scanner_ids, ordered_ids)
+            distance_by_id = {match.observation_id: match.distance for match in matches}
+            observations = fetch_ranked_observations(
+                self.team_id, scanner_ids, [match.observation_id for match in matches]
+            )
+            results = [{"observation": obs, "distance": distance_by_id[str(obs.id)]} for obs in observations]
         serializer = ObservationSearchResponseSerializer({"results": results}, context=self.get_serializer_context())
         return Response(serializer.data)
 
