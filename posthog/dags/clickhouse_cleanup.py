@@ -11,9 +11,9 @@ the Postgres handoff, reads the snapshot rather than recomputing it.
 """
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from math import ceil
 
@@ -78,6 +78,10 @@ class CleanupConfig(dagster.Config):
     dictionary_load_timeout: int = pydantic.Field(
         default=600,
         description="How long to wait for a dictionary to finish loading on a host before failing the run.",
+    )
+    mutation_stall_timeout: int = pydantic.Field(
+        default=1800,
+        description="Fail a delete batch when attempts keep failing and no part completes for this many seconds.",
     )
 
 
@@ -576,54 +580,160 @@ def _emit(metrics: MetricsClient, name: str, labels: Mapping[str, str], value: f
         pass
 
 
+MUTATION_POLL_SECONDS = 15.0
+MUTATION_VISIBILITY_TIMEOUT_SECONDS = 300.0
+
+
+class MutationStalled(Exception):
+    pass
+
+
+@dataclass(frozen=True, kw_only=True)
+class MutationStatus:
+    """One host's view of a delete batch's mutations, read from its system.mutations."""
+
+    done: bool
+    visible: bool
+    parts_to_do: int
+    latest_fail_time: datetime | None
+    latest_fail_reason: str
+    server_now: datetime
+
+
+class MutationProgress:
+    """Decides when a polled mutation is stuck rather than merely slow or still retrying.
+
+    ClickHouse retries a failed part mutation on its own, and system.mutations keeps the
+    latest_fail_* columns populated from the newest failed attempt even after later attempts
+    succeed, so a failure reason alone is not evidence the mutation is dying. A batch is declared
+    stuck only when attempts are still failing while no part has completed for stall_timeout
+    seconds. A batch that is slow without failing is left to run: that is a big part or a busy
+    cluster, not a fault.
+
+    A failure recorded before polling began is treated as history rather than evidence, because
+    MutationRunner can re-attach to an existing mutation whose old attempts failed; only failures
+    within one stall window of the first poll, or newer than the newest one already seen, count.
+    """
+
+    def __init__(self, stall_timeout: float, visibility_timeout: float = MUTATION_VISIBILITY_TIMEOUT_SECONDS) -> None:
+        self.stall_timeout = stall_timeout
+        self.visibility_timeout = visibility_timeout
+        self._started_at: float | None = None
+        self._last_progress_at: float = 0.0
+        self._min_parts_to_do: int | None = None
+        self._last_fail_time: datetime | None = None
+        self._failed_since_progress = False
+
+    def observe(self, statuses: Sequence[MutationStatus], now: float) -> None:
+        """Digest one poll of every host, raising MutationStalled when the batch is stuck."""
+        first = self._started_at is None
+        if first:
+            self._started_at = now
+            self._last_progress_at = now
+        assert self._started_at is not None
+
+        if not all(status.visible for status in statuses):
+            # The mutation entry replicates through Keeper, so a lagged replica can briefly not
+            # know it yet; that only becomes a fault when it persists.
+            if now - self._started_at > self.visibility_timeout:
+                raise MutationStalled(f"not visible on every host after {self.visibility_timeout:.0f}s")
+            return
+
+        parts_to_do = sum(status.parts_to_do for status in statuses)
+        if self._min_parts_to_do is None or parts_to_do < self._min_parts_to_do:
+            self._min_parts_to_do = parts_to_do
+            self._last_progress_at = now
+            self._failed_since_progress = False
+
+        newest_fail = max((s.latest_fail_time for s in statuses if s.latest_fail_time is not None), default=None)
+        if first:
+            self._last_fail_time = newest_fail
+            if newest_fail is not None:
+                freshness_horizon = max(s.server_now for s in statuses) - timedelta(seconds=self.stall_timeout)
+                self._failed_since_progress = newest_fail > freshness_horizon
+        elif newest_fail is not None and (self._last_fail_time is None or newest_fail > self._last_fail_time):
+            self._last_fail_time = newest_fail
+            self._failed_since_progress = True
+
+        stalled_for = now - self._last_progress_at
+        if self._failed_since_progress and stalled_for > self.stall_timeout:
+            raise MutationStalled(f"attempts keep failing and no part completed in {stalled_for:.0f}s")
+
+
 def _wait_for_mutation(
     context: dagster.OpExecutionContext,
     cluster: ClickhouseCluster,
     table: str,
     mutation: MutationWaiter,
     label: str,
+    stall_timeout: float,
 ) -> None:
-    """Block until the mutation finishes, failing loudly if it is stuck failing.
+    """Block until the mutation finishes on every host, failing only when it is stuck.
 
-    MutationWaiter.wait alone polls is_done forever and never reads latest_fail_reason, so a
-    mutation that fails on every attempt is indistinguishable from a slow one. This reads the
-    reason out of system.mutations and raises with the mutation id and batch label, so the
-    failure names the point to resume from.
+    MutationWaiter.wait polls is_done forever and never reads latest_fail_reason, so a mutation
+    failing on every attempt is indistinguishable from a slow one. MutationProgress arbitrates
+    between the two, and the raised Failure names the batch and mutation ids for diagnosis.
+
+    Every host is polled, not one: a mutation can fail on a single replica, and asking only one
+    host would poll a stuck mutation forever.
     """
     ids = tuple(mutation.mutation_ids)
 
-    def health(client: Client) -> tuple[int, str]:
-        rows = client.execute(
+    def status(client: Client) -> MutationStatus:
+        [[done, visible, parts_to_do, fail_time, fail_reason, server_now]] = client.execute(
             """
-            SELECT sum(parts_to_do), max(latest_fail_reason)
+            SELECT
+                countIf(is_done) = count() AND count() = %(expected)s,
+                count() = %(expected)s,
+                sum(parts_to_do),
+                max(latest_fail_time),
+                argMax(latest_fail_reason, latest_fail_time),
+                now()
             FROM system.mutations
             WHERE database = %(database)s AND table = %(table)s AND mutation_id IN %(ids)s
             """,
-            {"database": settings.CLICKHOUSE_DATABASE, "table": table, "ids": ids},
+            {"database": settings.CLICKHOUSE_DATABASE, "table": table, "ids": ids, "expected": len(ids)},
         )
-        return (rows[0][0] or 0, rows[0][1] or "") if rows else (0, "")
+        return MutationStatus(
+            done=bool(done),
+            visible=bool(visible),
+            parts_to_do=int(parts_to_do or 0),
+            # latest_fail_time is the epoch when no attempt ever failed, so the reason is the
+            # authoritative "has failed" signal and the time is only meaningful alongside it.
+            latest_fail_time=fail_time if fail_reason else None,
+            latest_fail_reason=fail_reason or "",
+            server_now=server_now,
+        )
 
+    progress = MutationProgress(stall_timeout=stall_timeout)
     while True:
-        if all(cluster.map_all_hosts(mutation.is_done).result().values()):
+        statuses = list(cluster.map_all_hosts(status).result().values())
+        if statuses and all(s.done for s in statuses):
             return
 
-        # Every host, not one: a mutation can fail on a single replica, and asking only one host
-        # would poll a stuck mutation forever.
-        reports = cluster.map_all_hosts(health).result().values()
-        parts_to_do = sum(parts for parts, _ in reports)
-        fail_reason = next((reason for _, reason in reports if reason), "")
-        if fail_reason:
+        parts_to_do = sum(s.parts_to_do for s in statuses)
+        fail_reason = next((s.latest_fail_reason for s in statuses if s.latest_fail_reason), "")
+        try:
+            progress.observe(statuses, time.monotonic())
+        except MutationStalled as stalled:
             raise dagster.Failure(
-                description=f"mutation on {table} is failing: {fail_reason}",
+                description=f"mutation on {table} looks stuck: {fail_reason or stalled}",
                 metadata={
                     "batch": dagster.MetadataValue.text(label),
                     "mutation_ids": dagster.MetadataValue.text(", ".join(ids)),
                     "parts_to_do": dagster.MetadataValue.int(parts_to_do),
                     "latest_fail_reason": dagster.MetadataValue.text(fail_reason),
+                    "stall": dagster.MetadataValue.text(str(stalled)),
                 },
+            ) from stalled
+
+        if fail_reason:
+            context.log.warning(
+                "%s: %s parts remaining, ClickHouse retrying after: %s", label, parts_to_do, fail_reason
             )
-        context.log.info("%s: %s parts remaining", label, parts_to_do)
-        time.sleep(15.0)
+        else:
+            context.log.info("%s: %s parts remaining", label, parts_to_do)
+        time.sleep(MUTATION_POLL_SECONDS)
 
 
 def _team_ranges(team_ids: list[int], batches: int) -> list[tuple[int, int]]:
@@ -649,6 +759,7 @@ def _run_ordered_delete(
     key_tuple: str,
     team_ranges: list[tuple[int, int]],
     metrics: MetricsClient,
+    stall_timeout: float,
 ) -> int:
     """Delete every snapshotted row from `table`, oldest version first.
 
@@ -685,7 +796,7 @@ def _run_ordered_delete(
             # Both tables are replicated and not sharded, so a mutation started on one host
             # reaches all of them.
             mutation = cluster.any_host(runner).result()
-            _wait_for_mutation(context, cluster, table, mutation, f"{table}:{low}-{high}:{pass_name}")
+            _wait_for_mutation(context, cluster, table, mutation, f"{table}:{low}-{high}:{pass_name}", stall_timeout)
             _emit(metrics, "clickhouse_cleanup_delete_pass_total", {"table": table, "pass": pass_name})
             batches += 1
 
@@ -716,6 +827,7 @@ def delete_orphaned_distinct_ids(
         "(team_id, distinct_id)",
         ranges,
         MetricsClient(cluster),
+        config.mutation_stall_timeout,
     )
 
     return replace(run, distinct_ids_deleted_at=datetime.now(UTC))
@@ -809,6 +921,7 @@ def delete_persons(
         "(team_id, id)",
         ranges,
         MetricsClient(cluster),
+        config.mutation_stall_timeout,
     )
 
     return run

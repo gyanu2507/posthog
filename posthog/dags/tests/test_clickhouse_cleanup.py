@@ -1,5 +1,6 @@
 import itertools
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -19,6 +20,9 @@ from posthog.clickhouse.cluster import ClickhouseCluster
 from posthog.dags import clickhouse_cleanup
 from posthog.dags.clickhouse_cleanup import (
     PG_CLEANUP_QUEUE_TABLE,
+    MutationProgress,
+    MutationStalled,
+    MutationStatus,
     OrphanedDistinctIdsTable,
     clickhouse_deletion_sweep_job,
 )
@@ -630,3 +634,119 @@ def test_team_ranges_cover_every_candidate_team_exactly_once():
 def test_more_batches_than_teams_does_not_produce_empty_ranges():
     ranges = clickhouse_cleanup._team_ranges([5, 6], batches=10)
     assert ranges == [(5, 5), (6, 6)]
+
+
+T0 = datetime(2026, 1, 1, 12, 0, 0)
+
+
+def failing_status(fail_at: datetime, parts: int = 10, now: datetime | None = None) -> MutationStatus:
+    return MutationStatus(
+        done=False,
+        visible=True,
+        parts_to_do=parts,
+        latest_fail_time=fail_at,
+        latest_fail_reason="boom",
+        server_now=now or fail_at,
+    )
+
+
+def quiet_status(parts: int = 10, visible: bool = True) -> MutationStatus:
+    return MutationStatus(
+        done=False,
+        visible=visible,
+        parts_to_do=parts,
+        latest_fail_time=None,
+        latest_fail_reason="",
+        server_now=T0,
+    )
+
+
+def test_mutation_progress_tolerates_failures_while_parts_still_complete():
+    # ClickHouse retries failed part mutations itself; as long as parts keep completing the run
+    # must keep waiting. Reverting to fail-on-any-reason kills a batch that would have finished.
+    progress = MutationProgress(stall_timeout=100)
+    progress.observe([quiet_status(parts=20)], now=0)
+    for tick in range(1, 15):
+        progress.observe([failing_status(T0 + timedelta(seconds=tick * 60), parts=20 - tick)], now=tick * 60)
+
+
+def test_mutation_progress_declares_a_stall_when_failures_recur_without_progress():
+    progress = MutationProgress(stall_timeout=100)
+    progress.observe([quiet_status(parts=3), quiet_status(parts=10)], now=0)
+    progress.observe([quiet_status(parts=3), failing_status(T0 + timedelta(seconds=15))], now=15)
+    with pytest.raises(MutationStalled):
+        progress.observe([quiet_status(parts=3), failing_status(T0 + timedelta(seconds=120))], now=120)
+
+
+def test_mutation_progress_ignores_a_failure_that_predates_polling():
+    # MutationRunner can re-attach to an existing mutation whose old attempts failed; that history
+    # must not condemn a batch that has not failed since.
+    stale = T0 - timedelta(hours=6)
+    progress = MutationProgress(stall_timeout=100)
+    progress.observe([failing_status(stale, now=T0)], now=0)
+    progress.observe([failing_status(stale, now=T0 + timedelta(seconds=200))], now=200)
+    with pytest.raises(MutationStalled):
+        progress.observe([failing_status(T0 + timedelta(seconds=300))], now=300)
+
+
+def test_mutation_progress_counts_a_failure_just_before_the_first_poll():
+    # A freshly enqueued mutation can fail before the first poll lands; unlike a re-attached
+    # mutation's stale history, that failure is evidence.
+    progress = MutationProgress(stall_timeout=100)
+    progress.observe([failing_status(T0 - timedelta(seconds=5), now=T0)], now=0)
+    with pytest.raises(MutationStalled):
+        progress.observe([failing_status(T0 - timedelta(seconds=5), now=T0 + timedelta(seconds=150))], now=150)
+
+
+def test_mutation_progress_waits_on_a_slow_mutation_that_is_not_failing():
+    # No failures means a big part or a busy cluster; declaring that stuck would kill every
+    # long-running healthy batch.
+    progress = MutationProgress(stall_timeout=100)
+    for tick in range(100):
+        progress.observe([quiet_status(parts=10)], now=tick * 60)
+
+
+def test_mutation_progress_tolerates_brief_invisibility_and_fails_when_it_persists():
+    # The mutation entry replicates through Keeper, so a lagged replica briefly not knowing it is
+    # normal; a replica that never learns of it is not.
+    progress = MutationProgress(stall_timeout=100, visibility_timeout=300)
+    progress.observe([quiet_status(visible=False)], now=0)
+    progress.observe([quiet_status(visible=False)], now=299)
+    with pytest.raises(MutationStalled):
+        progress.observe([quiet_status(visible=False)], now=301)
+
+
+@pytest.mark.django_db
+def test_a_mutation_that_fails_every_attempt_fails_the_run_and_gets_killed(
+    cluster: ClickhouseCluster, persons_database, monkeypatch
+):
+    deleted = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    create_person_distinct_id(team_id=TEAM_ID, distinct_id="doomed", person_id=deleted, version=0)
+
+    monkeypatch.setattr(clickhouse_cleanup, "MUTATION_POLL_SECONDS", 0.1)
+    real_runner = clickhouse_cleanup.LightweightDeleteMutationRunner
+
+    def poisoned_runner(*args, **kwargs):
+        # Fails at part-mutation time on every attempt, not at submission: the predicate reads a
+        # column, so ClickHouse cannot constant-fold the throw during validation.
+        kwargs["predicate"] = f"throwIf(version >= 0, 'poisoned sweep') OR ({kwargs['predicate']})"
+        return real_runner(*args, **kwargs)
+
+    stalling = {"ops": {"clear_removed_cohort_data": {"config": {"dry_run": False, "mutation_stall_timeout": 1}}}}
+    with patch.object(clickhouse_cleanup, "LightweightDeleteMutationRunner", poisoned_runner):
+        result = run_job(cluster, persons_database, run_config=stalling, raise_on_error=False)
+
+    assert not result.success
+    # The poisoned mutation never applied, so the data is intact.
+    assert cluster.any_host(surviving_distinct_ids).result() == {"doomed"}
+
+    # The failure hook must kill the stuck mutation, or it retries in the background forever and
+    # blocks every later mutation on the table.
+    def unfinished_mutations(client: Client) -> int:
+        [[count]] = client.execute(
+            "SELECT count() FROM system.mutations WHERE NOT is_done AND NOT is_killed AND table = %(table)s",
+            {"table": "person_distinct_id2"},
+        )
+        return count
+
+    assert cluster.any_host(unfinished_mutations).result() == 0
