@@ -33,10 +33,8 @@ from posthog.persons_db import persons_db_url
 TEAM_ID = 4242
 COHORT_ID = 77
 
-# dry_run is declared on the first op alone, which is what stops a launch from setting it on one
-# op and missing another.
-# dry_run defaults to true, so a real sweep opts in the way the schedule does. Declared on the first
-# op alone, which is what stops a launch from setting it on one op and missing another.
+# dry_run defaults to true, so a real sweep opts in. Declared on the first op alone, which is
+# what stops a launch from setting it on one op and missing another.
 RUN_FOR_REAL = {"ops": {"clear_removed_cohort_data": {"config": {"dry_run": False}}}}
 
 

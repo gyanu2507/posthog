@@ -59,13 +59,20 @@ PG_CLEANUP_QUEUE_TABLE = "person_pg_cleanup_queue"
 # the op's memory to one page however large the snapshot is.
 PERSIST_PAGE_SIZE = 50_000
 
-# Team ranges are cut so each batch reads a contiguous slice of the sort key. team_id leads
-# ORDER BY on both tables, so the primary index prunes granules outside the range, and the
-# total read across batches stays close to a single scan of the candidate teams.
-DEFAULT_TEAM_BATCHES = 12
+# Each delete runs as one pair of ordered mutations per contiguous team-id range. Ranges do not
+# reduce what a mutation reads or rewrites: merged parts span nearly the whole team-id space, so
+# every batch touches most parts and each extra batch re-rewrites their delete masks. What
+# batching buys is granularity, since each batch is a separate mutation with stable command text
+# that a retry re-attaches to instead of restarting a table-sized mutation. Keep this small.
+DEFAULT_TEAM_BATCHES = 4
 
 
 class CleanupConfig(dagster.Config):
+    """Read once, by the first op, and carried to every later op on CleanupRun.
+
+    Setting any of these on another op's config has no effect.
+    """
+
     dry_run: bool = pydantic.Field(
         default=True,
         description="Build the snapshot and report what would be removed, without deleting anything.",
@@ -394,11 +401,12 @@ class SnapshotDictionary:
 
 @dataclass(frozen=True, kw_only=True)
 class CleanupRun:
-    """Every per-run asset, threaded through the ops so they execute in sequence.
+    """Every per-run asset and setting, threaded through the ops so they execute in sequence.
 
-    dry_run travels here rather than being read from config by each op, so it is set in one
-    place. Declaring it on every op would let a launch set it on one and miss another, and
-    half a sweep is worse than none.
+    Settings travel here rather than being read from config by each op, so a launch sets them in
+    one place: the first op's config. Declaring them per op would let a launch set one on some
+    ops and miss others, and a sweep whose halves disagree on dry_run or batching is worse than
+    none.
     """
 
     persons: DeletedPersonsTable
@@ -406,7 +414,13 @@ class CleanupRun:
     orphaned: OrphanedDistinctIdsTable
     revived_distinct_ids: RevivedDistinctIdsTable
     dry_run: bool
+    cleanup: bool
+    team_batches: int
+    shards: int
+    max_execution_time: int
+    max_memory_usage: int
     dictionary_load_timeout: int
+    mutation_stall_timeout: int
     distinct_ids_deleted_at: datetime | None = None
 
     @classmethod
@@ -419,7 +433,13 @@ class CleanupRun:
             orphaned=OrphanedDistinctIdsTable(run_id=scoped),
             revived_distinct_ids=RevivedDistinctIdsTable(run_id=scoped),
             dry_run=config.dry_run,
+            cleanup=config.cleanup,
+            team_batches=config.team_batches,
+            shards=config.shards,
+            max_execution_time=config.max_execution_time,
+            max_memory_usage=config.max_memory_usage,
             dictionary_load_timeout=config.dictionary_load_timeout,
+            mutation_stall_timeout=config.mutation_stall_timeout,
         )
 
     @property
@@ -447,17 +467,17 @@ def _load_and_verify(cluster: ClickhouseCluster, dictionary: SnapshotDictionary,
 
 
 def _create_dictionary(
-    cluster: ClickhouseCluster, dictionary: SnapshotDictionary, config: CleanupConfig
+    cluster: ClickhouseCluster, dictionary: SnapshotDictionary, run: CleanupRun
 ) -> SnapshotDictionary:
     cluster.map_all_hosts(
         partial(
             dictionary.create,
-            shards=config.shards,
-            max_execution_time=config.max_execution_time,
-            max_memory_usage=config.max_memory_usage,
+            shards=run.shards,
+            max_execution_time=run.max_execution_time,
+            max_memory_usage=run.max_memory_usage,
         )
     ).result()
-    _load_and_verify(cluster, dictionary, config.dictionary_load_timeout)
+    _load_and_verify(cluster, dictionary, run.dictionary_load_timeout)
     return dictionary
 
 
@@ -509,18 +529,17 @@ def snapshot_deleted_persons(
 @dagster.op
 def snapshot_orphaned_distinct_ids(
     context: dagster.OpExecutionContext,
-    config: CleanupConfig,
     cluster: dagster.ResourceParam[ClickhouseCluster],
     run: CleanupRun,
 ) -> CleanupRun:
     """Resolve which distinct ids belong to the snapshotted persons, or tombstoned themselves."""
-    _create_dictionary(cluster, run.persons_dictionary, config)
+    _create_dictionary(cluster, run.persons_dictionary, run)
 
     cluster.any_host_by_role(
         partial(run.orphaned.populate, persons_dictionary=run.persons_dictionary), NodeRole.DATA
     ).result()
     cluster.map_all_hosts(run.orphaned.sync_replica).result()
-    _create_dictionary(cluster, run.orphaned_dictionary, config)
+    _create_dictionary(cluster, run.orphaned_dictionary, run)
 
     count = cluster.any_host_by_role(run.orphaned.count, NodeRole.DATA).result()
     context.add_output_metadata({"orphaned_distinct_ids": dagster.MetadataValue.int(count)})
@@ -830,7 +849,6 @@ def _run_ordered_delete(
 @dagster.op
 def delete_orphaned_distinct_ids(
     context: dagster.OpExecutionContext,
-    config: CleanupConfig,
     cluster: dagster.ResourceParam[ClickhouseCluster],
     run: CleanupRun,
 ) -> CleanupRun:
@@ -839,7 +857,7 @@ def delete_orphaned_distinct_ids(
         context.log.info("dry run: skipping the delete from %s", PERSON_DISTINCT_ID2_TABLE)
         return run
 
-    ranges = _team_ranges(cluster.any_host_by_role(run.orphaned.team_ids, NodeRole.DATA).result(), config.team_batches)
+    ranges = _team_ranges(cluster.any_host_by_role(run.orphaned.team_ids, NodeRole.DATA).result(), run.team_batches)
     context.add_output_metadata({"team_ranges": dagster.MetadataValue.int(len(ranges))})
 
     _run_ordered_delete(
@@ -850,7 +868,7 @@ def delete_orphaned_distinct_ids(
         "(team_id, distinct_id)",
         ranges,
         MetricsClient(cluster),
-        config.mutation_stall_timeout,
+        run.mutation_stall_timeout,
     )
 
     return replace(run, distinct_ids_deleted_at=datetime.now(UTC))
@@ -940,7 +958,6 @@ def persist_deleted_persons(
 @dagster.op
 def delete_persons(
     context: dagster.OpExecutionContext,
-    config: CleanupConfig,
     cluster: dagster.ResourceParam[ClickhouseCluster],
     run: CleanupRun,
 ) -> CleanupRun:
@@ -953,7 +970,7 @@ def delete_persons(
         context.log.info("dry run: skipping the delete from %s", PERSONS_TABLE)
         return run
 
-    ranges = _team_ranges(cluster.any_host_by_role(run.persons.team_ids, NodeRole.DATA).result(), config.team_batches)
+    ranges = _team_ranges(cluster.any_host_by_role(run.persons.team_ids, NodeRole.DATA).result(), run.team_batches)
     context.add_output_metadata({"team_ranges": dagster.MetadataValue.int(len(ranges))})
 
     _run_ordered_delete(
@@ -964,7 +981,7 @@ def delete_persons(
         "(team_id, id)",
         ranges,
         MetricsClient(cluster),
-        config.mutation_stall_timeout,
+        run.mutation_stall_timeout,
     )
 
     return run
@@ -973,12 +990,11 @@ def delete_persons(
 @dagster.op
 def drop_snapshot_assets(
     context: dagster.OpExecutionContext,
-    config: CleanupConfig,
     cluster: dagster.ResourceParam[ClickhouseCluster],
     run: CleanupRun,
 ) -> None:
     """Drop this run's dictionaries and clear the rows they read."""
-    if not config.cleanup:
+    if not run.cleanup:
         context.log.info("cleanup disabled, leaving the assets for run %s in place", run.persons.run_id)
         return
 
