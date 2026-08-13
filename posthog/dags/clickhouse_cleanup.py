@@ -41,6 +41,8 @@ from posthog.dags.common.common import settings_with_log_comment
 from posthog.models.async_deletion.delete_cohorts import sweep_cohort_deletions
 from posthog.models.person.sql import PERSON_DISTINCT_ID2_TABLE, PERSONS_TABLE
 
+logger = dagster.get_dagster_logger(__name__)
+
 REVIVED_PERSON_COUNTER = Counter(
     "posthog_clickhouse_cleanup_revived_persons_total",
     "Persons that came back to life between the snapshot and the sweep, and were excluded",
@@ -380,8 +382,13 @@ class SnapshotDictionary:
         return self.checksum(client)
 
     def checksum(self, client: Client) -> int:
-        # XOR is order independent, so hosts that hold the same keys agree regardless of read order.
-        [[checksum]] = client.execute(f"SELECT groupBitXor(cityHash64({self.key_columns})) FROM {self.qualified_name}")
+        # XOR is order independent, so hosts that hold the same entries agree regardless of read
+        # order. max_version is hashed along with the keys because the delete mutation reads it
+        # from each host's local dictionary: hosts agreeing on keys but not on the version bound
+        # would delete different version sets per replica and diverge the table.
+        [[checksum]] = client.execute(
+            f"SELECT groupBitXor(cityHash64({self.key_columns}, max_version)) FROM {self.qualified_name}"
+        )
         return checksum
 
 
@@ -458,6 +465,7 @@ def _create_dictionary(
 def clear_removed_cohort_data(
     context: dagster.OpExecutionContext,
     config: CleanupConfig,
+    cluster: dagster.ResourceParam[ClickhouseCluster],
 ) -> CleanupRun:
     """Remove cohort membership rows for cohorts that were deleted or recalculated.
 
@@ -475,6 +483,10 @@ def clear_removed_cohort_data(
 
     failed = sweep_cohort_deletions()
     context.add_output_metadata({"failed_passes": dagster.MetadataValue.text(", ".join(failed) or "none")})
+    # The prometheus counters sweep_cohort_deletions increments die with this run's pod, so the
+    # scrapeable record of a failed pass is the ClickHouse-backed counter.
+    for name in failed:
+        _emit(MetricsClient(cluster), "clickhouse_cleanup_cohort_sweep_failed_passes", {"pass": name})
     return run
 
 
@@ -562,8 +574,15 @@ def recheck_revived_persons(name: str) -> dagster.OpDefinition:
             return run
 
         # Reloading is what applies the exclusion, so it only happens when something came back.
+        # Counted twice on purpose: the prometheus counters only surface if this pod is ever
+        # scraped, while the ClickHouse-backed counters survive the run.
         REVIVED_PERSON_COUNTER.inc(revived_persons)
         REVIVED_DISTINCT_ID_COUNTER.inc(revived_ids)
+        metrics = MetricsClient(cluster)
+        if revived_persons:
+            _emit(metrics, "clickhouse_cleanup_revived", {"kind": "persons"}, value=revived_persons)
+        if revived_ids:
+            _emit(metrics, "clickhouse_cleanup_revived", {"kind": "distinct_ids"}, value=revived_ids)
         context.log.warning(
             "%s persons and %s distinct ids came back during the run and are excluded from it",
             revived_persons,
@@ -581,7 +600,7 @@ def _emit(metrics: MetricsClient, name: str, labels: Mapping[str, str], value: f
     try:
         metrics.increment(name, labels=dict(labels), value=value).result()
     except Exception:
-        pass
+        logger.warning("failed to record %s", name, exc_info=True)
 
 
 MUTATION_POLL_SECONDS = 15.0
