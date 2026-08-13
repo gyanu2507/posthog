@@ -1,6 +1,10 @@
 import type { Contribution } from "@posthog/di/contribution";
 import {
+  getCurrentSessionId,
   initializePostHog,
+  isFeatureFlagEnabled,
+  onFeatureFlagsLoaded,
+  onSessionIdChanged,
   registerAppVersion,
 } from "@posthog/ui/shell/posthogAnalyticsImpl";
 import { trpcClient } from "@renderer/trpc/client";
@@ -8,6 +12,8 @@ import { logger } from "@utils/logger";
 import { injectable } from "inversify";
 
 const log = logger.scope("app-boot");
+
+const SESSION_STITCHING_FLAG = "desktop-web-session-stitching";
 
 @injectable()
 export class AnalyticsBootContribution implements Contribution {
@@ -22,6 +28,7 @@ export class AnalyticsBootContribution implements Contribution {
         }
         initializePostHog(sessionId);
       }
+      this.pushSessionIdToMain();
       trpcClient.os.getAppVersion
         .query()
         .then(registerAppVersion)
@@ -29,6 +36,32 @@ export class AnalyticsBootContribution implements Contribution {
           log.warn("Failed to register app version super property", { error });
         });
     })();
+  }
+
+  // Main decorates outbound PostHog web links with the renderer's live session
+  // id (cross-surface session stitching). The flag doubles as a remote kill
+  // switch for shipped binaries: while off, main holds null and never
+  // decorates. Flags load after init, so the flags-loaded hook performs the
+  // initial push; onSessionIdChanged covers idle rotations and logout resets.
+  private pushSessionIdToMain(): void {
+    let lastPushed: string | null | undefined;
+    const sync = () => {
+      const sessionId = isFeatureFlagEnabled(SESSION_STITCHING_FLAG)
+        ? getCurrentSessionId()
+        : null;
+      if (sessionId === lastPushed) {
+        return;
+      }
+      lastPushed = sessionId;
+      trpcClient.analytics.setRendererSessionId
+        .mutate({ sessionId })
+        .catch((error) => {
+          lastPushed = undefined;
+          log.warn("Failed to push session id to main", { error });
+        });
+    };
+    onFeatureFlagsLoaded(sync);
+    onSessionIdChanged(sync);
   }
 }
 
