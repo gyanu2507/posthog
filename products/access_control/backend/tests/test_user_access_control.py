@@ -21,16 +21,12 @@ from products.access_control.backend.facade.user_access_control import (
     get_field_access_control_map,
     model_to_resource,
 )
+from products.access_control.backend.models.access_control import AccessControl
 from products.dashboards.backend.models.dashboard import Dashboard
 from products.replay_vision.backend.models.vision_action import VisionAction, VisionActionRun
 from products.warehouse_sources.backend.facade.models import DataWarehouseTable, ExternalDataSource
 
-try:
-    from products.access_control.backend.models.access_control import AccessControl
-
-    from ee.models.rbac.role import Role, RoleMembership
-except ImportError:
-    pass
+from ee.models.rbac.role import Role, RoleMembership
 
 
 class BaseUserAccessControlTest(BaseTest):

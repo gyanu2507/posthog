@@ -42,13 +42,9 @@ from products.access_control.backend.facade.user_access_control import (
     model_to_resource,
     ordered_access_levels,
 )
+from products.access_control.backend.models.access_control import AccessControl
 
-try:
-    from products.access_control.backend.models.access_control import AccessControl
-
-    from ee.models.rbac.role import Role, RoleMembership
-except ImportError:
-    pass
+from ee.models.rbac.role import Role, RoleMembership
 
 pytestmark = pytest.mark.ee
 

@@ -3,7 +3,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from freezegun import freeze_time
@@ -24,6 +24,7 @@ from posthog.models.user import User
 from posthog.schema_enums import AlertState
 from posthog.utils import relative_date_parse
 
+from products.access_control.backend.models.access_control import AccessControl
 from products.alerts.backend.models.alert import AlertCheck, AlertConfiguration
 from products.product_analytics.backend.models.insight import Insight
 from products.slack_app.backend.api import (
@@ -32,14 +33,6 @@ from products.slack_app.backend.api import (
     _handle_insight_alert_snooze_modal_submit,
 )
 from products.slack_app.backend.tests.helpers import sign_slack_request
-
-if TYPE_CHECKING:
-    from products.access_control.backend.models.access_control import AccessControl
-else:
-    try:
-        from products.access_control.backend.models.access_control import AccessControl
-    except ImportError:
-        AccessControl = None
 
 
 class TestPostHogCodeInteractivityHandler(TestCase):

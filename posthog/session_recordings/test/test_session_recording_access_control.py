@@ -11,13 +11,9 @@ from posthog.session_recordings.models.session_recording import SessionRecording
 from posthog.session_recordings.session_recording_api import RecordingsListingResult
 
 from products.access_control.backend.facade.user_access_control import UserAccessControl
+from products.access_control.backend.models.access_control import AccessControl
 
-try:
-    from products.access_control.backend.models.access_control import AccessControl
-
-    from ee.models.rbac.role import Role, RoleMembership
-except ImportError:
-    pass
+from ee.models.rbac.role import Role, RoleMembership
 
 
 @pytest.mark.ee

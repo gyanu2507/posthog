@@ -10,14 +10,10 @@ from posthog.models.organization import OrganizationMembership
 from posthog.models.user import User
 
 from products.access_control.backend.facade.user_access_control import UserAccessControl
+from products.access_control.backend.models.access_control import AccessControl
 from products.warehouse_sources.backend.facade.models import ExternalDataSchema, ExternalDataSource
 
-try:
-    from products.access_control.backend.models.access_control import AccessControl
-
-    from ee.models.rbac.role import Role, RoleMembership
-except ImportError:
-    pass
+from ee.models.rbac.role import Role, RoleMembership
 
 
 @pytest.mark.ee

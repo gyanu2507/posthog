@@ -7,15 +7,11 @@ from rest_framework import status
 from posthog.models.organization import OrganizationMembership
 from posthog.models.user import User
 
+from products.access_control.backend.models.access_control import AccessControl
 from products.data_modeling.backend.facade.models import DAG, DataWarehouseSavedQuery, Node, NodeType
 from products.data_tools.backend.models.datawarehouse_saved_query_folder import DataWarehouseSavedQueryFolder
 from products.warehouse_sources.backend.facade.models import DataWarehouseCredential, DataWarehouseTable
 from products.warehouse_sources.backend.tests.api._access_control_base import WarehouseAccessControlTestMixin
-
-try:
-    from products.access_control.backend.models.access_control import AccessControl
-except ImportError:
-    pass
 
 
 @pytest.mark.ee

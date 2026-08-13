@@ -9,13 +9,10 @@ from posthog.constants import AvailableFeature
 from posthog.models.organization import OrganizationMembership
 from posthog.models.user import User
 
+from products.access_control.backend.models.access_control import AccessControl
+
 from ...models.community_skills import CommunitySkill, CommunitySkillFile, CommunitySkillVote
 from ...models.skills import LLMSkill
-
-try:
-    from products.access_control.backend.models.access_control import AccessControl
-except ImportError:
-    pass
 
 
 def _create_community_skill(
