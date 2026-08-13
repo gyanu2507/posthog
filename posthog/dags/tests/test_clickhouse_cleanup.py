@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 from unittest.mock import patch
 
+import dagster
 import psycopg2
 from clickhouse_driver import Client
 
@@ -761,3 +762,39 @@ def test_a_mutation_that_fails_every_attempt_fails_the_run_and_gets_killed(
         return count
 
     assert cluster.any_host(unfinished_mutations).result() == 0
+
+
+def _deletes_success_context(instance: dagster.DagsterInstance) -> dagster.RunStatusSensorContext:
+    deletes_run = dagster.DagsterRun(job_name="deletes_job", run_id="11111111-1111-1111-1111-111111111111")
+    return dagster.build_run_status_sensor_context(
+        sensor_name="run_cleanup_sweep_after_deletes",
+        dagster_event=dagster.DagsterEvent(
+            event_type_value=dagster.DagsterEventType.RUN_SUCCESS.value, job_name="deletes_job"
+        ),
+        dagster_instance=instance,
+        dagster_run=deletes_run,
+    )
+
+
+def test_the_sweep_sensor_launches_a_real_run_after_deletes():
+    # Weekly hard-deletion has no Celery fallback anymore. A sensor that ships stopped or loses
+    # the dry_run override silently ends or no-ops the sweep.
+    sensor = clickhouse_cleanup.run_cleanup_sweep_after_deletes
+    assert sensor.default_status == dagster.DefaultSensorStatus.RUNNING
+
+    instance = dagster.DagsterInstance.ephemeral()
+    request = sensor(_deletes_success_context(instance))
+    assert isinstance(request, dagster.RunRequest)
+    assert request.run_config == RUN_FOR_REAL
+    # One sweep per deletes_job success: re-evaluating the same event must not launch another.
+    assert request.run_key == "11111111-1111-1111-1111-111111111111"
+
+
+def test_the_sweep_sensor_skips_while_a_sweep_is_already_active():
+    # Two concurrent sweeps would mutate person and person_distinct_id2 at the same time, which
+    # is the contention this sensor exists to prevent.
+    instance = dagster.DagsterInstance.ephemeral()
+    instance.create_run_for_job(job_def=clickhouse_deletion_sweep_job, status=dagster.DagsterRunStatus.STARTED)
+
+    result = clickhouse_cleanup.run_cleanup_sweep_after_deletes(_deletes_success_context(instance))
+    assert isinstance(result, dagster.SkipReason)
