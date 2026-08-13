@@ -2550,6 +2550,7 @@ class ExternalDataSourceType(StrEnum):
     RAKUTEN_ADVERTISING = "RakutenAdvertising"
     ZITADEL = "Zitadel"
     DEEL_FLOWS = "DeelFlows"
+    ROKT_ADS = "RoktAds"
 
 
 class ExternalQueryErrorCode(StrEnum):
