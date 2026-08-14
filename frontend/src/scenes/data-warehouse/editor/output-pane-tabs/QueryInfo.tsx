@@ -22,7 +22,6 @@ import { syncIntervalToShorthand } from 'products/data_warehouse/frontend/utils'
 
 import { sqlEditorLogic } from '../sqlEditorLogic'
 import { infoTabLogic } from './infoTabLogic'
-import { QueryIndexUsageTable } from './QueryIndexUsageTable'
 
 interface QueryInfoProps {
     tabId: string
@@ -30,7 +29,7 @@ interface QueryInfoProps {
 }
 
 export function QueryInfo({ tabId, view }: QueryInfoProps): JSX.Element {
-    const { editingView, upstream, upstreamViewMode, metadata } = useValues(sqlEditorLogic)
+    const { editingView, upstream, upstreamViewMode } = useValues(sqlEditorLogic)
     const targetView = view ?? editingView
     const infoLogic = infoTabLogic({ tabId, viewId: targetView?.id })
     const { sourceTableItems } = useValues(infoLogic)
@@ -99,8 +98,6 @@ export function QueryInfo({ tabId, view }: QueryInfoProps): JSX.Element {
                         </LemonButton>
                     </div>
                 )}
-                <QueryIndexUsageTable predicates={metadata?.index_usage ?? []} />
-
                 {!isLineageDependencyViewEnabled && (
                     <>
                         <div>
