@@ -1580,16 +1580,20 @@ export const OriginProductEnumApi = {
  * * `plan` - plan
  * * `bypassPermissions` - bypassPermissions
  * * `auto` - auto
+ * * `read-only` - read-only
+ * * `full-access` - full-access
  */
-export type InitialPermissionModeEnumApi =
-    (typeof InitialPermissionModeEnumApi)[keyof typeof InitialPermissionModeEnumApi]
+export type TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi =
+    (typeof TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi)[keyof typeof TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi]
 
-export const InitialPermissionModeEnumApi = {
+export const TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi = {
     Default: 'default',
     AcceptEdits: 'acceptEdits',
     Plan: 'plan',
     BypassPermissions: 'bypassPermissions',
     Auto: 'auto',
+    ReadOnly: 'read-only',
+    FullAccess: 'full-access',
 } as const
 
 /**
@@ -1704,8 +1708,10 @@ export interface TaskCreateApi {
      * * `acceptEdits` - acceptEdits
      * * `plan` - plan
      * * `bypassPermissions` - bypassPermissions
-     * * `auto` - auto */
-    initial_permission_mode?: InitialPermissionModeEnumApi | null
+     * * `auto` - auto
+     * * `read-only` - read-only
+     * * `full-access` - full-access */
+    initial_permission_mode?: TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi | null
     /**
      * First user message to forward when creation reuses a pre-warmed Run. Write-only and not persisted on the task: lets clients deliver a message that differs from `description` (e.g. a resolved skill invocation with channel context folded in). Ignored when no warm Run is reused — cold creation takes the first message via the run start endpoint instead.
      * @nullable
@@ -1855,8 +1861,10 @@ export interface TaskWriteApi {
      * * `acceptEdits` - acceptEdits
      * * `plan` - plan
      * * `bypassPermissions` - bypassPermissions
-     * * `auto` - auto */
-    initial_permission_mode?: InitialPermissionModeEnumApi | null
+     * * `auto` - auto
+     * * `read-only` - read-only
+     * * `full-access` - full-access */
+    initial_permission_mode?: TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi | null
     /**
      * First user message to forward when creation reuses a pre-warmed Run. Write-only and not persisted on the task: lets clients deliver a message that differs from `description` (e.g. a resolved skill invocation with channel context folded in). Ignored when no warm Run is reused — cold creation takes the first message via the run start endpoint instead.
      * @nullable
@@ -1991,8 +1999,10 @@ export interface PatchedTaskWriteApi {
      * * `acceptEdits` - acceptEdits
      * * `plan` - plan
      * * `bypassPermissions` - bypassPermissions
-     * * `auto` - auto */
-    initial_permission_mode?: InitialPermissionModeEnumApi | null
+     * * `auto` - auto
+     * * `read-only` - read-only
+     * * `full-access` - full-access */
+    initial_permission_mode?: TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi | null
     /**
      * First user message to forward when creation reuses a pre-warmed Run. Write-only and not persisted on the task: lets clients deliver a message that differs from `description` (e.g. a resolved skill invocation with channel context folded in). Ignored when no warm Run is reused — cold creation takes the first message via the run start endpoint instead.
      * @nullable
@@ -2276,6 +2286,24 @@ export type ContextWindowEnumApi = (typeof ContextWindowEnumApi)[keyof typeof Co
 export const ContextWindowEnumApi = {
     '200k': '200k',
     '1m': '1m',
+} as const
+
+/**
+ * * `default` - default
+ * * `acceptEdits` - acceptEdits
+ * * `plan` - plan
+ * * `bypassPermissions` - bypassPermissions
+ * * `auto` - auto
+ */
+export type InitialPermissionModeEnumApi =
+    (typeof InitialPermissionModeEnumApi)[keyof typeof InitialPermissionModeEnumApi]
+
+export const InitialPermissionModeEnumApi = {
+    Default: 'default',
+    AcceptEdits: 'acceptEdits',
+    Plan: 'plan',
+    BypassPermissions: 'bypassPermissions',
+    Auto: 'auto',
 } as const
 
 /**
@@ -2718,28 +2746,6 @@ export type TaskRunBootstrapCreateRequestEnvironmentEnumApi =
 export const TaskRunBootstrapCreateRequestEnvironmentEnumApi = {
     Local: 'local',
     Cloud: 'cloud',
-} as const
-
-/**
- * * `default` - default
- * * `acceptEdits` - acceptEdits
- * * `plan` - plan
- * * `bypassPermissions` - bypassPermissions
- * * `auto` - auto
- * * `read-only` - read-only
- * * `full-access` - full-access
- */
-export type TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi =
-    (typeof TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi)[keyof typeof TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi]
-
-export const TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi = {
-    Default: 'default',
-    AcceptEdits: 'acceptEdits',
-    Plan: 'plan',
-    BypassPermissions: 'bypassPermissions',
-    Auto: 'auto',
-    ReadOnly: 'read-only',
-    FullAccess: 'full-access',
 } as const
 
 /**
@@ -4102,8 +4108,10 @@ export interface WarmTaskRequestApi {
      * * `acceptEdits` - acceptEdits
      * * `plan` - plan
      * * `bypassPermissions` - bypassPermissions
-     * * `auto` - auto */
-    initial_permission_mode?: InitialPermissionModeEnumApi | null
+     * * `auto` - auto
+     * * `read-only` - read-only
+     * * `full-access` - full-access */
+    initial_permission_mode?: TaskRunBootstrapCreateRequestInitialPermissionModeEnumApi | null
 }
 
 /**
