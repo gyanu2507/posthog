@@ -634,17 +634,17 @@ def test_team_ranges_cover_every_candidate_team_exactly_once():
 
     assert clickhouse_cleanup._team_ranges([], batches=4) == []
     # Contiguous and non-overlapping, so no key falls between two batches.
-    assert [low for low, _ in ranges] == sorted(low for low, _ in ranges)
-    for (_, high), (next_low, _) in zip(ranges, ranges[1:]):
-        assert high < next_low
+    assert [r.low for r in ranges] == sorted(r.low for r in ranges)
+    for earlier, later in zip(ranges, ranges[1:]):
+        assert earlier.high < later.low
     for team in teams:
-        assert sum(1 for low, high in ranges if low <= team <= high) == 1
+        assert sum(1 for r in ranges if r.low <= team <= r.high) == 1
 
 
 @pytest.mark.django_db
 def test_more_batches_than_teams_does_not_produce_empty_ranges():
     ranges = clickhouse_cleanup._team_ranges([5, 6], batches=10)
-    assert ranges == [(5, 5), (6, 6)]
+    assert ranges == [clickhouse_cleanup.TeamRange(low=5, high=5), clickhouse_cleanup.TeamRange(low=6, high=6)]
 
 
 T0 = datetime(2026, 1, 1, 12, 0, 0)

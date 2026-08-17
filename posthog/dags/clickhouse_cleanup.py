@@ -778,7 +778,15 @@ def _wait_for_mutation(
         time.sleep(MUTATION_POLL_SECONDS)
 
 
-def _team_ranges(team_ids: list[int], batches: int) -> list[tuple[int, int]]:
+@dataclass(frozen=True, kw_only=True)
+class TeamRange:
+    """One inclusive [low, high] slice of the candidate team ids."""
+
+    low: int
+    high: int
+
+
+def _team_ranges(team_ids: list[int], batches: int) -> list[TeamRange]:
     """Cut sorted team ids into contiguous, inclusive [low, high] ranges that cover all of them.
 
     Bounds are real team ids rather than an even split of the id space, so batches hold roughly
@@ -790,7 +798,10 @@ def _team_ranges(team_ids: list[int], batches: int) -> list[tuple[int, int]]:
         return []
     ordered = sorted(team_ids)
     size = max(1, ceil(len(ordered) / max(1, batches)))
-    return [(chunk[0], chunk[-1]) for chunk in (ordered[i : i + size] for i in range(0, len(ordered), size))]
+    return [
+        TeamRange(low=chunk[0], high=chunk[-1])
+        for chunk in (ordered[i : i + size] for i in range(0, len(ordered), size))
+    ]
 
 
 def _run_ordered_delete(
@@ -799,7 +810,7 @@ def _run_ordered_delete(
     table: str,
     dictionary: SnapshotDictionary,
     key_tuple: str,
-    team_ranges: list[tuple[int, int]],
+    team_ranges: list[TeamRange],
     metrics: MetricsClient,
     stall_timeout: float,
 ) -> int:
@@ -827,9 +838,9 @@ def _run_ordered_delete(
     )
 
     batches = 0
-    for low, high in team_ranges:
+    for team_range in team_ranges:
         for pass_name, key_predicate in passes:
-            predicate = f"team_id >= {low} AND team_id <= {high} AND {key_predicate}"
+            predicate = f"team_id >= {team_range.low} AND team_id <= {team_range.high} AND {key_predicate}"
             runner = LightweightDeleteMutationRunner(
                 table=table,
                 predicate=predicate,
@@ -838,7 +849,14 @@ def _run_ordered_delete(
             # Both tables are replicated and not sharded, so a mutation started on one host
             # reaches all of them.
             mutation = cluster.any_host(runner).result()
-            _wait_for_mutation(context, cluster, table, mutation, f"{table}:{low}-{high}:{pass_name}", stall_timeout)
+            _wait_for_mutation(
+                context,
+                cluster,
+                table,
+                mutation,
+                f"{table}:{team_range.low}-{team_range.high}:{pass_name}",
+                stall_timeout,
+            )
             _emit(metrics, "clickhouse_cleanup_delete_pass_total", {"table": table, "pass": pass_name})
             batches += 1
 
