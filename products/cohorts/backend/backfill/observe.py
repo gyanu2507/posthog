@@ -36,7 +36,6 @@ from products.cohorts.backend.models.backfill import (
 # its last reading forever; `livemax` drops the dead process but still reports the largest sample
 # among the live ones, so a stale high reading from a worker that has not run the task since
 # outranks the fresh zero from the worker that did. `livemostrecent` takes the latest write.
-# (`finalize.py`'s HELD_RUNS_GAUGE still uses `max` and carries the same latent issue.)
 # `Final` so the literal type survives: `Gauge` takes a `Literal[...]`, which a plain `str` fails.
 _MULTIPROCESS_MODE: Final = "livemostrecent"
 

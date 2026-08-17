@@ -71,7 +71,12 @@ HELD_RUNS_GAUGE = Gauge(
     # run parked behind the readiness gate), "not_allowlisted" (excluded by
     # BEHAVIORAL_BACKFILL_FINALIZER_RUN_ALLOWLIST)
     ["reason"],
-    multiprocess_mode="max",
+    # Each pass is a whole-fleet snapshot, so only the newest reading is correct. `max` pinned the
+    # gauge at the highest value any celery process ever wrote, including dead ones, so a backlog
+    # that has since drained still reads as full. Widening the allowlist is meant to be watched on
+    # `not_allowlisted` going to zero, which `max` could never show. See `observe.py` for the same
+    # reasoning applied to its gauges.
+    multiprocess_mode="livemostrecent",
 )
 
 
