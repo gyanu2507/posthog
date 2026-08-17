@@ -33,11 +33,12 @@ from posthog.clickhouse.cleanup_snapshots import (
     CLEANUP_REVIVED_PERSONS_TABLE,
     CLEANUP_SNAPSHOT_TABLES,
 )
-from posthog.clickhouse.client.connection import ClickHouseUser, get_clickhouse_creds
+from posthog.clickhouse.client.connection import ClickHouseCredentials, ClickHouseUser, get_clickhouse_creds
 from posthog.clickhouse.cluster import ClickhouseCluster, LightweightDeleteMutationRunner, MutationWaiter, NodeRole
 from posthog.clickhouse.custom_metrics import MetricsClient
 from posthog.dags.common import JobOwners
 from posthog.dags.common.common import settings_with_log_comment
+from posthog.dags.common.dictionaries import ClusterDictionary, load_and_verify
 from posthog.models.async_deletion.delete_cohorts import sweep_cohort_deletions
 from posthog.models.person.sql import PERSON_DISTINCT_ID2_TABLE, PERSONS_TABLE
 
@@ -303,8 +304,14 @@ class RevivedDistinctIdsTable(SnapshotTable):
 
 
 @dataclass(frozen=True, kw_only=True)
-class SnapshotDictionary:
-    """A cluster-wide dictionary over one run's rows in a worklist, minus anything since revived."""
+class SnapshotDictionary(ClusterDictionary):
+    """A cluster-wide dictionary over one run's rows in a worklist, minus anything since revived.
+
+    The inherited checksum hashes every declared column, which here includes max_version: the
+    delete mutation reads it from each host's local dictionary, so hosts agreeing on keys but
+    not on the version bound would delete different version sets per replica and diverge the
+    table.
+    """
 
     source: SnapshotTable
     # Keys recorded here are anti-joined out of the dictionary, which is how a checkpoint
@@ -322,8 +329,12 @@ class SnapshotDictionary:
         return f"{self.source.table_name}_{self.source.run_id}_dictionary"
 
     @property
-    def qualified_name(self) -> str:
-        return f"{settings.CLICKHOUSE_DATABASE}.{self.name}"
+    def schema(self) -> str:
+        return self.source.dictionary_types
+
+    @property
+    def primary_key(self) -> str:
+        return self.key_columns
 
     @property
     def query(self) -> str:
@@ -333,70 +344,11 @@ class SnapshotDictionary:
               AND ({self.key_columns}) NOT IN ({self.excluded.run_keys_query})
         """
 
-    def create(self, client: Client, shards: int, max_execution_time: int, max_memory_usage: int) -> None:
+    @property
+    def credentials(self) -> ClickHouseCredentials:
         # The source reads as the low-privilege dict_reader user, which falls back to the default
-        # user's credentials where dict_reader is not provisioned. Credentials are query parameters
-        # so they stay out of the traced statement.
-        creds = get_clickhouse_creds(ClickHouseUser.DICT_READER)
-        client.execute(
-            f"""
-            CREATE DICTIONARY IF NOT EXISTS {self.qualified_name} ({self.source.dictionary_types})
-            PRIMARY KEY {self.key_columns}
-            SOURCE(CLICKHOUSE(DB %(database)s USER %(user)s PASSWORD %(password)s QUERY %(query)s))
-            LAYOUT(COMPLEX_KEY_HASHED(SHARDS {shards}))
-            LIFETIME(0)
-            SETTINGS(max_execution_time={max_execution_time}, max_memory_usage={max_memory_usage})
-            """,
-            {
-                "database": settings.CLICKHOUSE_DATABASE,
-                "user": creds.user,
-                "password": creds.password,
-                "query": self.query,
-            },
-        )
-
-    def drop(self, client: Client) -> None:
-        client.execute(f"DROP DICTIONARY IF EXISTS {self.qualified_name} SYNC")
-
-    def is_loaded(self, client: Client) -> bool:
-        results = client.execute(
-            "SELECT status, last_exception FROM system.dictionaries WHERE database = %(database)s AND name = %(name)s",
-            {"database": settings.CLICKHOUSE_DATABASE, "name": self.name},
-        )
-        if not results:
-            raise Exception(f"{self.qualified_name} does not exist")
-        [[status, last_exception]] = results
-        if status == "LOADED":
-            return True
-        if status in {"LOADING", "FAILED_AND_RELOADING", "LOADED_AND_RELOADING"}:
-            return False
-        if status == "FAILED":
-            raise Exception(f"{self.qualified_name} failed to load: {last_exception}")
-        raise Exception(f"{self.qualified_name} in unexpected status: {status}")
-
-    def load(self, client: Client, timeout_seconds: int) -> int:
-        client.execute(f"SYSTEM RELOAD DICTIONARY {self.qualified_name}")
-
-        # The reload is asynchronous, so the mutation would read a half-populated dictionary
-        # without this wait. A dictionary wedged in LOADING would otherwise hold the run open
-        # forever, and a weekly job nobody is watching is exactly where that goes unnoticed.
-        deadline = time.monotonic() + timeout_seconds
-        while not self.is_loaded(client):
-            if time.monotonic() > deadline:
-                raise Exception(f"{self.qualified_name} still not loaded after {timeout_seconds}s")
-            time.sleep(5.0)
-
-        return self.checksum(client)
-
-    def checksum(self, client: Client) -> int:
-        # XOR is order independent, so hosts that hold the same entries agree regardless of read
-        # order. max_version is hashed along with the keys because the delete mutation reads it
-        # from each host's local dictionary: hosts agreeing on keys but not on the version bound
-        # would delete different version sets per replica and diverge the table.
-        [[checksum]] = client.execute(
-            f"SELECT groupBitXor(cityHash64({self.key_columns}, max_version)) FROM {self.qualified_name}"
-        )
-        return checksum
+        # user's credentials where dict_reader is not provisioned.
+        return get_clickhouse_creds(ClickHouseUser.DICT_READER)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -455,17 +407,6 @@ class CleanupRun:
         return SnapshotDictionary(source=self.orphaned, excluded=self.revived_distinct_ids)
 
 
-def _load_and_verify(cluster: ClickhouseCluster, dictionary: SnapshotDictionary, timeout_seconds: int) -> None:
-    """Load on every host and require them to agree.
-
-    The delete predicate probes whichever host runs the mutation, so hosts holding different key
-    sets would delete different rows. Every load goes through here, including the reloads a
-    checkpoint issues after recording a revival.
-    """
-    checksums = cluster.map_all_hosts(partial(dictionary.load, timeout_seconds=timeout_seconds), concurrency=1).result()
-    assert len(set(checksums.values())) == 1, f"{dictionary.name} differs across hosts: {checksums}"
-
-
 def _create_dictionary(
     cluster: ClickhouseCluster, dictionary: SnapshotDictionary, run: CleanupRun
 ) -> SnapshotDictionary:
@@ -477,7 +418,7 @@ def _create_dictionary(
             max_memory_usage=run.max_memory_usage,
         )
     ).result()
-    _load_and_verify(cluster, dictionary, run.dictionary_load_timeout)
+    load_and_verify(cluster, dictionary, timeout_seconds=run.dictionary_load_timeout)
     return dictionary
 
 
@@ -608,7 +549,7 @@ def recheck_revived_persons(name: str) -> dagster.OpDefinition:
             revived_ids,
         )
         for dictionary in (run.persons_dictionary, run.orphaned_dictionary):
-            _load_and_verify(cluster, dictionary, run.dictionary_load_timeout)
+            load_and_verify(cluster, dictionary, timeout_seconds=run.dictionary_load_timeout)
         return run
 
     return checkpoint
