@@ -232,7 +232,7 @@ class AdhocEventDeletesTable(Table):
         client.execute(f"OPTIMIZE TABLE {self.qualified_name} FINAL")
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class PendingDeletesDictionary(ClusterDictionary):
     source: PendingDeletesTable
 
@@ -253,7 +253,7 @@ class PendingDeletesDictionary(ClusterDictionary):
         return f"SELECT team_id, deletion_type, key, created_at FROM {self.source.qualified_name}"
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class AdhocEventDeletesDictionary(ClusterDictionary):
     source: AdhocEventDeletesTable
 
