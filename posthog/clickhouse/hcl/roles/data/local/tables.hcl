@@ -249,6 +249,7 @@ database "posthog" {
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity = "8192"
+      ttl_only_drop_parts = "1"
     }
     column "run_id" {
       type = "String"
@@ -277,6 +278,7 @@ database "posthog" {
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity = "8192"
+      ttl_only_drop_parts = "1"
     }
     column "run_id" {
       type = "String"
@@ -311,6 +313,7 @@ database "posthog" {
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity = "8192"
+      ttl_only_drop_parts = "1"
     }
     column "run_id" {
       type = "String"
@@ -336,6 +339,7 @@ database "posthog" {
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity = "8192"
+      ttl_only_drop_parts = "1"
     }
     column "run_id" {
       type = "String"
