@@ -25,7 +25,7 @@ class TestCleanupOrphanedIdentityProviderConfigs(BaseTest):
         OrganizationDomain.objects.create(
             organization=self.organization,
             domain="linked.posthog.com",
-            identity_provider_config=linked_config,
+            _identity_provider_config=linked_config,
         )
 
         migration.delete_orphaned_identity_provider_configs(apps, None)

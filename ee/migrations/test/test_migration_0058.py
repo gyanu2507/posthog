@@ -26,7 +26,7 @@ class TestBackfillSCIMProvisionedUserConfig(BaseTest):
             organization=self.organization,
             domain="example.com",
             verified_at="2024-01-01T00:00:00Z",
-            identity_provider_config=self.config,
+            _identity_provider_config=self.config,
         )
         self.provisioned_user = User.objects.create_user(
             email="provisioned@example.com", password=None, first_name="Provisioned"
@@ -55,7 +55,7 @@ class TestBackfillSCIMProvisionedUserConfig(BaseTest):
             organization=self.organization,
             domain="partner.example.com",
             verified_at="2024-01-01T00:00:00Z",
-            identity_provider_config=self.config,
+            _identity_provider_config=self.config,
         )
         first_record = self._create_record(self.provisioned_user, self.domain)
         second_record = self._create_record(self.provisioned_user, second_domain)

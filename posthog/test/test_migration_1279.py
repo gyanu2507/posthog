@@ -16,7 +16,7 @@ class TestLinkedIdentityProviderConfigBackfill(BaseTest):
         linked_domain = OrganizationDomain.objects.create(
             organization=self.organization,
             domain="linked.example.com",
-            identity_provider_config=linked_config,
+            _identity_provider_config=linked_config,
         )
         OrganizationDomain.objects.create(
             organization=self.organization,
@@ -35,7 +35,7 @@ class TestLinkedIdentityProviderConfigBackfill(BaseTest):
         domain = OrganizationDomain.objects.create(
             organization=self.organization,
             domain="linked.example.com",
-            identity_provider_config=config,
+            _identity_provider_config=config,
         )
 
         migration.backfill_linked_identity_provider_configs(apps, None)
