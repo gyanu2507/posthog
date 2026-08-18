@@ -6,8 +6,13 @@ from django.core.cache import cache
 
 from parameterized import parameterized
 
+from products.exports.backend.facade.api import RENDER_TIMEOUT
 from products.signals.backend.models import SignalReport, SignalScoutRun
-from products.signals.backend.scout_harness.slack_charts import MAX_SLACK_REPORT_CHARTS, build_scout_report_chart_blocks
+from products.signals.backend.scout_harness.slack_charts import (
+    MAX_SLACK_REPORT_CHARTS,
+    SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS,
+    build_scout_report_chart_blocks,
+)
 from products.signals.backend.scout_harness.slack_delivery import build_scout_report_slack_message
 
 _TRENDS = {"kind": "InsightVizNode", "source": {"kind": "TrendsQuery", "series": [{"event": "$pageview"}]}}
@@ -136,10 +141,28 @@ class TestScoutSlackReportCharts(BaseTest):
 
         assert [b["image_url"] for b in blocks if b["type"] == "image"] == ["https://img/1"]
 
-    def test_render_budget_stops_further_charts(self) -> None:
+    def test_cache_outage_still_delivers_charts(self) -> None:
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart("a", _TRENDS)])
+        render, url = self._patched_render()
+        with (
+            render as render_mock,
+            url as url_mock,
+            patch("products.signals.backend.scout_harness.slack_charts.cache") as cache_mock,
+        ):
+            cache_mock.get.side_effect = ConnectionError("redis down")
+            cache_mock.set.side_effect = ConnectionError("redis down")
+            render_mock.return_value = (MagicMock(id=1), b"png")
+            url_mock.return_value = "https://img/1"
+            blocks = build_scout_report_chart_blocks(report, run, delivery_id="delivery-2")
+
+        assert [b["image_url"] for b in blocks if b["type"] == "image"] == ["https://img/1"]
+
+    def test_render_budget_reserves_time_for_a_whole_render(self) -> None:
         run = self._make_run(created_by=self.user)
         report = self._make_report([_chart("a", _TRENDS), _chart("b", _TRENDS)])
-        clock = iter([0.0, 0.0, 10_000.0])
+        # The second chart is checked with less than one RENDER_TIMEOUT of budget left.
+        clock = iter([0.0, 0.0, SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS - RENDER_TIMEOUT.total_seconds() + 1])
         render, url = self._patched_render()
         with render as render_mock, url as url_mock:
             render_mock.return_value = (MagicMock(id=1), b"png")

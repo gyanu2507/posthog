@@ -11,17 +11,19 @@ import structlog
 
 from posthog.models import Team, User
 
-from products.exports.backend.facade.api import get_delivery_image_url, render_png_export
+from products.exports.backend.facade.api import RENDER_TIMEOUT, get_delivery_image_url, render_png_export
 from products.signals.backend.models import SignalReport, SignalScoutRun
 from products.signals.backend.slack_formatting import escape_slack_mrkdwn
 
 logger = structlog.get_logger(__name__)
 
-# Each render can hold the Celery worker for the facade's 90s cap, and the delivery task retries
-# the whole message on transient failure, so both the count and the total time are bounded. Charts
-# past either bound still show in the inbox; the Slack message just links there.
+# Each render can hold the Celery worker for the facade's RENDER_TIMEOUT, and the delivery task
+# retries the whole message on transient failure, so both the count and the total time are bounded.
+# A render only starts if it can finish inside the budget, so the budget is the worst case, not the
+# point after which no more start. Charts past either bound still show in the inbox; the Slack
+# message just links there.
 MAX_SLACK_REPORT_CHARTS = 3
-SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS = 150
+SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS = 240
 
 # Slack re-fetches image_url after the message is posted, so the token has to outlive the post
 # by a comfortable margin; matches what task-run chart delivery uses.
@@ -99,6 +101,28 @@ def _rendered_assets_cache_key(delivery_id: str) -> str:
     return f"signals_scout:slack_report_chart_assets:{delivery_id}"
 
 
+# The cache only saves re-renders on retry; if it is down the message must still go out, so both
+# sides degrade to "no reuse" rather than raising into the delivery task.
+def _load_rendered_assets(cache_key: str | None) -> dict[str, int]:
+    if cache_key is None:
+        return {}
+    try:
+        cached = cache.get(cache_key)
+    except Exception:
+        logger.warning("signals_scout.slack_report_chart_cache_read_failed", exc_info=True)
+        return {}
+    return dict(cached) if isinstance(cached, dict) else {}
+
+
+def _store_rendered_assets(cache_key: str | None, rendered_assets: dict[str, int]) -> None:
+    if cache_key is None or not rendered_assets:
+        return
+    try:
+        cache.set(cache_key, rendered_assets, timeout=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
+    except Exception:
+        logger.warning("signals_scout.slack_report_chart_cache_write_failed", exc_info=True)
+
+
 def build_scout_report_chart_blocks(
     report: SignalReport,
     run: SignalScoutRun,
@@ -124,7 +148,7 @@ def build_scout_report_chart_blocks(
         return []
 
     cache_key = _rendered_assets_cache_key(delivery_id) if delivery_id else None
-    rendered_assets: dict[str, int] = (cache.get(cache_key) if cache_key else None) or {}
+    rendered_assets = _load_rendered_assets(cache_key)
     started = clock()
     blocks: list[dict] = []
     attempts = 0
@@ -136,7 +160,10 @@ def build_scout_report_chart_blocks(
             continue
         chart_id = str(chart.get("chart_id"))
         asset_id = rendered_assets.get(chart_id)
-        if asset_id is None and clock() - started > SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS:
+        if (
+            asset_id is None
+            and clock() - started + RENDER_TIMEOUT.total_seconds() > SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS
+        ):
             logger.info("signals_scout.slack_report_chart_budget_exhausted", report_id=str(report.id))
             break
         attempts += 1
@@ -160,6 +187,5 @@ def build_scout_report_chart_blocks(
             continue
         rendered_assets[chart_id] = asset_id
         blocks.extend(_chart_blocks(chart, image_url))
-    if cache_key and rendered_assets:
-        cache.set(cache_key, rendered_assets, timeout=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
+    _store_rendered_assets(cache_key, rendered_assets)
     return blocks
