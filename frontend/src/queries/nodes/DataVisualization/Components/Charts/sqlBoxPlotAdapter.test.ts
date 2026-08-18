@@ -91,6 +91,16 @@ describe('sqlBoxPlotAdapter', () => {
         expect(buildSqlBoxPlotModel(rows, columns, boxPlotSettings).error).toBe(error)
     })
 
+    test('rejects result shapes that would create a large sparse matrix', () => {
+        const rows = Array.from({ length: 101 }, (_, label) =>
+            Array.from({ length: 100 }, (_, series) => [label, series, 1, 2, 3, 4, 5, 6])
+        ).flat()
+
+        expect(buildSqlBoxPlotModel(rows, columns, settings).error).toBe(
+            'The box plot has too many X-axis and series combinations. Reduce the query result.'
+        )
+    })
+
     test('uses one distribution when the query returns one row without grouping columns', () => {
         const model = buildSqlBoxPlotModel(
             [[1, 2, 3, 4, 5, 6]],

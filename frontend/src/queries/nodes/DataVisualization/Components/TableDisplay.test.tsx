@@ -38,8 +38,8 @@ describe('TableDisplay', () => {
     it('offers box plots and saves the selected display when the feature is enabled', async () => {
         initKeaTests()
         featureFlagLogic.mount()
-        featureFlagLogic.actions.setFeatureFlags([FEATURE_FLAGS.BOX_PLOT_INSIGHT], {
-            [FEATURE_FLAGS.BOX_PLOT_INSIGHT]: true,
+        featureFlagLogic.actions.setFeatureFlags([FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT], {
+            [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]: true,
         })
 
         let query: DataVisualizationNode = {

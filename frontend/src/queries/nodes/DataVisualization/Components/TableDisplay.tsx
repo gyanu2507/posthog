@@ -122,7 +122,7 @@ export const TableDisplay = ({ disabledReason }: TableDisplayProps): JSX.Element
                         ? 'Requires at least two numeric columns, one for each axis'
                         : undefined,
                 },
-                ...(featureFlags[FEATURE_FLAGS.BOX_PLOT_INSIGHT]
+                ...(featureFlags[FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]
                     ? [
                           {
                               value: ChartDisplayType.BoxPlot,

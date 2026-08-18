@@ -6,7 +6,7 @@ import type { BoxPlotConfig } from '@posthog/quill-charts'
 
 import { useChartConfig, useChartTheme } from 'lib/charts/hooks'
 
-import { BoxPlotSettings, ChartSettings } from '~/queries/schema/schema-general'
+import { ChartSettings } from '~/queries/schema/schema-general'
 
 import { makeChartErrorHandler } from 'products/product_analytics/frontend/insights/trends/shared/chartErrorHandler'
 
@@ -18,7 +18,6 @@ const handleChartError = makeChartErrorHandler('sql-box-plot')
 export interface SqlBoxPlotProps {
     rows: unknown[][]
     columns: Column[]
-    settings: BoxPlotSettings
     chartSettings: ChartSettings
     presetChartHeight?: boolean
     className?: string
@@ -27,13 +26,15 @@ export interface SqlBoxPlotProps {
 export const SqlBoxPlot = ({
     rows,
     columns,
-    settings,
     chartSettings,
     presetChartHeight,
     className,
 }: SqlBoxPlotProps): JSX.Element => {
     const theme = useChartTheme()
-    const model = useMemo(() => buildSqlBoxPlotModel(rows, columns, settings), [rows, columns, settings])
+    const model = useMemo(
+        () => buildSqlBoxPlotModel(rows, columns, chartSettings.boxPlot ?? {}),
+        [rows, columns, chartSettings.boxPlot]
+    )
     const yAxisSettings = chartSettings.leftYAxisSettings
     const config = useChartConfig<BoxPlotConfig>(
         () => ({

@@ -5,22 +5,9 @@ import { LemonBanner, LemonLabel, LemonSelect, LemonTag } from '@posthog/lemon-u
 import { BoxPlotSettings } from '~/queries/schema/schema-general'
 
 import { Column, dataVisualizationLogic } from '../dataVisualizationLogic'
+import { BOX_PLOT_STATISTICS } from './Charts/sqlBoxPlotAdapter'
 
 const NONE_COLUMN = '__posthog_box_plot_none__'
-
-type StatisticColumnKey = keyof Pick<
-    BoxPlotSettings,
-    'minColumn' | 'p25Column' | 'medianColumn' | 'meanColumn' | 'p75Column' | 'maxColumn'
->
-
-const statisticFields: { key: StatisticColumnKey; label: string }[] = [
-    { key: 'minColumn', label: 'Minimum' },
-    { key: 'p25Column', label: '25th percentile' },
-    { key: 'medianColumn', label: 'Median' },
-    { key: 'meanColumn', label: 'Mean' },
-    { key: 'p75Column', label: '75th percentile' },
-    { key: 'maxColumn', label: 'Maximum' },
-]
 
 export const BoxPlotSeriesTab = (): JSX.Element => {
     const { chartSettings, columns, numericalColumns, responseLoading } = useValues(dataVisualizationLogic)
@@ -81,17 +68,17 @@ export const BoxPlotSeriesTab = (): JSX.Element => {
             </div>
 
             <div className="flex flex-col gap-3">
-                {statisticFields.map(({ key, label }) => (
-                    <div key={key}>
+                {BOX_PLOT_STATISTICS.map(({ setting, label }) => (
+                    <div key={setting}>
                         <LemonLabel className="mb-1">{label}</LemonLabel>
                         <LemonSelect
                             className="w-full"
-                            data-attr={`box-plot-${key}`}
-                            value={settings[key]}
+                            data-attr={`box-plot-${setting}`}
+                            value={settings[setting]}
                             placeholder="Select a numeric column"
                             options={numericalOptions}
                             disabledReason={disabledReason}
-                            onChange={(value) => updateSettings({ [key]: value })}
+                            onChange={(value) => updateSettings({ [setting]: value })}
                         />
                     </div>
                 ))}

@@ -4,6 +4,9 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import type { BoxPlotSeries } from '@posthog/quill-charts'
 
+import { FEATURE_FLAGS } from 'lib/constants'
+import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
+
 import { DataVisualizationNode, HogQLQueryResponse, NodeKind } from '~/queries/schema/schema-general'
 import { initKeaTests } from '~/test/init'
 import { ChartDisplayType } from '~/types'
@@ -56,6 +59,8 @@ describe('DataTableVisualization', () => {
 
     beforeEach(() => {
         initKeaTests()
+        featureFlagLogic.mount()
+        featureFlagLogic.actions.setFeatureFlags([], {})
         mockLatestLemonTableProps = null
         mockLatestBoxPlotProps = null
         mockLemonTable.mockClear()
@@ -63,9 +68,13 @@ describe('DataTableVisualization', () => {
 
     afterEach(() => {
         cleanup()
+        featureFlagLogic.unmount()
     })
 
-    it('renders grouped SQL box plot results', async () => {
+    it('renders grouped SQL box plot results when the feature is enabled', async () => {
+        featureFlagLogic.actions.setFeatureFlags([FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT], {
+            [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]: true,
+        })
         const boxPlotQuery: DataVisualizationNode = {
             ...query,
             display: ChartDisplayType.BoxPlot,
@@ -122,7 +131,32 @@ describe('DataTableVisualization', () => {
         })
     })
 
+    it('shows SQL box plots as tables when the feature is disabled', async () => {
+        const boxPlotQuery: DataVisualizationNode = {
+            ...query,
+            display: ChartDisplayType.BoxPlot,
+            chartSettings: { boxPlot: {} },
+        }
+
+        render(
+            <DataTableVisualization
+                uniqueKey="data-visualization-disabled-box-plot"
+                query={boxPlotQuery}
+                setQuery={jest.fn()}
+                cachedResults={cachedResults}
+                readOnly
+                embedded
+            />
+        )
+
+        await waitFor(() => expect(mockLemonTable).toHaveBeenCalled())
+        expect(mockLatestBoxPlotProps).toBeNull()
+    })
+
     it('explains how to fix invalid SQL box plot results', async () => {
+        featureFlagLogic.actions.setFeatureFlags([FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT], {
+            [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]: true,
+        })
         const boxPlotQuery: DataVisualizationNode = {
             ...query,
             display: ChartDisplayType.BoxPlot,

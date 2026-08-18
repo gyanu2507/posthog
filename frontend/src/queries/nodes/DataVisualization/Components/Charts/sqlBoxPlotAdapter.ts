@@ -1,4 +1,4 @@
-import type { BoxPlotSeries } from '@posthog/quill-charts'
+import type { BoxPlotDatum, BoxPlotSeries } from '@posthog/quill-charts'
 
 import { BoxPlotSettings } from '~/queries/schema/schema-general'
 
@@ -14,19 +14,28 @@ export interface SqlBoxPlotModel {
     error: string | null
 }
 
-type StatisticSetting = keyof Pick<
+export type BoxPlotStatisticColumn = keyof Pick<
     BoxPlotSettings,
     'minColumn' | 'p25Column' | 'medianColumn' | 'meanColumn' | 'p75Column' | 'maxColumn'
 >
 
-const statisticSettings: { setting: StatisticSetting; label: string; aliases: string[] }[] = [
-    { setting: 'minColumn', label: 'Minimum', aliases: ['min', 'minimum'] },
-    { setting: 'p25Column', label: '25th percentile', aliases: ['p25', 'q1'] },
-    { setting: 'medianColumn', label: 'Median', aliases: ['median', 'p50'] },
-    { setting: 'meanColumn', label: 'Mean', aliases: ['mean', 'avg', 'average'] },
-    { setting: 'p75Column', label: '75th percentile', aliases: ['p75', 'q3'] },
-    { setting: 'maxColumn', label: 'Maximum', aliases: ['max', 'maximum'] },
+type BoxPlotValue = keyof Pick<BoxPlotDatum, 'min' | 'p25' | 'median' | 'mean' | 'p75' | 'max'>
+
+export const BOX_PLOT_STATISTICS: {
+    setting: BoxPlotStatisticColumn
+    value: BoxPlotValue
+    label: string
+    aliases: string[]
+}[] = [
+    { setting: 'minColumn', value: 'min', label: 'Minimum', aliases: ['min', 'minimum'] },
+    { setting: 'p25Column', value: 'p25', label: '25th percentile', aliases: ['p25', 'q1'] },
+    { setting: 'medianColumn', value: 'median', label: 'Median', aliases: ['median', 'p50'] },
+    { setting: 'meanColumn', value: 'mean', label: 'Mean', aliases: ['mean', 'avg', 'average'] },
+    { setting: 'p75Column', value: 'p75', label: '75th percentile', aliases: ['p75', 'q3'] },
+    { setting: 'maxColumn', value: 'max', label: 'Maximum', aliases: ['max', 'maximum'] },
 ]
+
+const MAX_BOX_PLOT_CELLS = 10_000
 
 const emptyModel = (error: string | null = null): SqlBoxPlotModel => ({ labels: [], series: [], error })
 
@@ -54,7 +63,7 @@ export const getAutoBoxPlotSettings = (columns: BoxPlotColumn[], current: BoxPlo
         next.seriesColumn = findAliasedColumn(columns, ['series', 'breakdown'])?.name
     }
 
-    for (const statistic of statisticSettings) {
+    for (const statistic of BOX_PLOT_STATISTICS) {
         if (!findColumn(columns, current[statistic.setting], true)) {
             next[statistic.setting] = findAliasedColumn(columns, statistic.aliases, true)?.name
         }
@@ -76,7 +85,7 @@ export const buildSqlBoxPlotModel = (
     columns: BoxPlotColumn[],
     settings: BoxPlotSettings
 ): SqlBoxPlotModel => {
-    const statisticColumns = statisticSettings.map((statistic) => ({
+    const statisticColumns = BOX_PLOT_STATISTICS.map((statistic) => ({
         ...statistic,
         column: findColumn(columns, settings[statistic.setting], true),
     }))
@@ -96,7 +105,9 @@ export const buildSqlBoxPlotModel = (
     }
 
     const labels: string[] = []
+    const labelSet = new Set<string>()
     const seriesLabels: string[] = []
+    const seriesLabelSet = new Set<string>()
     const dataBySeries = new Map<string, Map<string, BoxPlotSeries['data'][number]>>()
     const rowByPair = new Map<string, number>()
 
@@ -112,37 +123,47 @@ export const buildSqlBoxPlotModel = (
         }
         rowByPair.set(pairKey, rowIndex)
 
-        const values = statisticColumns.map(({ column }) => finiteNumber(row[column!.dataIndex]))
-        if (values.some((value) => value === null)) {
+        const nullableValues = Object.fromEntries(
+            statisticColumns.map((statistic) => [statistic.value, finiteNumber(row[statistic.column!.dataIndex])])
+        ) as Record<BoxPlotValue, number | null>
+        if (Object.values(nullableValues).some((value) => value === null)) {
             return emptyModel(`Row ${rowIndex + 1} has a missing or non-numeric box plot statistic.`)
         }
 
-        const [min, p25, median, mean, p75, max] = values as [number, number, number, number, number, number]
-        if (!(min <= p25 && p25 <= median && median <= p75 && p75 <= max)) {
+        const values = nullableValues as Record<BoxPlotValue, number>
+        if (
+            !(
+                values.min <= values.p25 &&
+                values.p25 <= values.median &&
+                values.median <= values.p75 &&
+                values.p75 <= values.max
+            )
+        ) {
             return emptyModel(
                 `Row ${rowIndex + 1} has statistics in the wrong order. Expected min <= p25 <= median <= p75 <= max.`
             )
         }
-        if (mean < min || mean > max) {
+        if (values.mean < values.min || values.mean > values.max) {
             return emptyModel(`Row ${rowIndex + 1} has a mean outside its minimum and maximum.`)
         }
-
-        if (!labels.includes(label)) {
+        if (!labelSet.has(label)) {
             labels.push(label)
+            labelSet.add(label)
         }
-        if (!seriesLabels.includes(seriesLabel)) {
+        if (!seriesLabelSet.has(seriesLabel)) {
             seriesLabels.push(seriesLabel)
+            seriesLabelSet.add(seriesLabel)
+        }
+        if (labelSet.size * seriesLabelSet.size > MAX_BOX_PLOT_CELLS) {
+            return emptyModel('The box plot has too many X-axis and series combinations. Reduce the query result.')
         }
 
-        const iqr = p75 - p25
+        const iqr = values.p75 - values.p25
         const excludeOutliers = settings.excludeOutliers !== false
         const datum = {
-            min: excludeOutliers ? Math.max(min, p25 - 1.5 * iqr) : min,
-            p25,
-            median,
-            mean,
-            p75,
-            max: excludeOutliers ? Math.min(max, p75 + 1.5 * iqr) : max,
+            ...values,
+            min: excludeOutliers ? Math.max(values.min, values.p25 - 1.5 * iqr) : values.min,
+            max: excludeOutliers ? Math.min(values.max, values.p75 + 1.5 * iqr) : values.max,
         }
         const seriesData = dataBySeries.get(seriesLabel) ?? new Map()
         seriesData.set(label, datum)

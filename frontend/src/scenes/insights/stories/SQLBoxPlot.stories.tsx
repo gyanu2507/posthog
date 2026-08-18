@@ -13,7 +13,7 @@ const meta: Meta = {
     title: 'Scenes-App/Insights/SQLBoxPlot',
     parameters: {
         layout: 'fullscreen',
-        featureFlags: [FEATURE_FLAGS.BOX_PLOT_INSIGHT],
+        featureFlags: [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT],
         testOptions: {
             snapshotBrowsers: ['chromium'],
             viewport: { width: 1300, height: 720 },
