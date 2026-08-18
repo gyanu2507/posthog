@@ -172,8 +172,7 @@ DRAFT_CONTENT_FIELDS = (
 # been through validation. Comparing them would make an unchanged condition look edited.
 _DERIVED_FILTER_KEYS = ("bytecode", "bytecode_error", "source", "cohort_ids")
 
-# Rollout gate for cohort filters in conditional branches. Targeted per organization so the
-# feature can be proven on a few teams before general availability.
+# Rollout gate for cohort filters in conditional branches, targeted per organization
 WORKFLOWS_COHORT_CONDITIONS_FLAG = "workflows-cohort-conditions"
 
 
@@ -1053,8 +1052,7 @@ class HogFlowActionSerializer(serializers.Serializer):
         self.initial_data = data
         return super().to_internal_value(data)
 
-    # Memoized per serializer instance: the same instance validates every action in the array,
-    # and the flag evaluation is a network call.
+    # Memoized because one instance validates every action and the flag check is a network call
     _cohort_conditions_flag: Optional[bool] = None
 
     def _cohort_conditions_enabled(self) -> bool:
@@ -1354,12 +1352,9 @@ class HogFlowActionSerializer(serializers.Serializer):
                     if strict:
                         raise serializers.ValidationError("Event filters are not allowed in conditionals")
                 else:
-                    # Cohort filters are allowed in conditional_branch only: the branch evaluates
-                    # membership on arrival via a point lookup. A wait_until_condition would only
-                    # ever notice a membership change through its polling backstop (the matcher has
-                    # no cohort membership wake stream), so cohorts stay rejected there. The flag
-                    # check runs only when the condition actually references a cohort, so ordinary
-                    # saves never pay for it; with the flag off, cohorts fail compilation as before.
+                    # Cohorts are allowed in conditional_branch only: a wait_until_condition has no
+                    # membership wake stream, so it would only ever advance via the polling backstop.
+                    # With the flag off, cohorts fail compilation exactly as before.
                     cohorts_supported = (
                         is_conditional_branch and bool(filter_cohort_ids(filters)) and self._cohort_conditions_enabled()
                     )
