@@ -7,7 +7,6 @@ every week. `run_id` leads every sort key so a run reads only its own rows throu
 index.
 """
 
-from posthog.clickhouse.cluster import ON_CLUSTER_CLAUSE
 from posthog.clickhouse.table_engines import ReplacingMergeTree
 
 CLEANUP_DELETED_PERSONS_TABLE = "clickhouse_cleanup_deleted_persons"
@@ -20,9 +19,11 @@ CLEANUP_REVIVED_DISTINCT_IDS_TABLE = "clickhouse_cleanup_revived_distinct_ids"
 CLEANUP_SNAPSHOT_TTL_DAYS = 14
 
 
-def _cleanup_snapshot_table_sql(table_name: str, columns: str, sort_key: str, on_cluster: bool) -> str:
+def _cleanup_snapshot_table_sql(table_name: str, columns: str, sort_key: str) -> str:
+    # ttl_only_drop_parts stops TTL merges from rewriting a part that holds any expired row; the
+    # TTL is a backstop for failed runs, so reclaiming whole parts late beats weekly rewrites.
     return """
-CREATE TABLE IF NOT EXISTS {table_name} {on_cluster_clause}
+CREATE TABLE IF NOT EXISTS {table_name}
 (
     run_id String,
     {columns},
@@ -30,9 +31,9 @@ CREATE TABLE IF NOT EXISTS {table_name} {on_cluster_clause}
 ) ENGINE = {engine}
 ORDER BY (run_id, {sort_key})
 TTL created_at + INTERVAL {ttl_days} DAY
+SETTINGS ttl_only_drop_parts = 1
 """.format(
         table_name=table_name,
-        on_cluster_clause=ON_CLUSTER_CLAUSE(on_cluster),
         columns=columns,
         engine=ReplacingMergeTree(table_name, ver="created_at"),
         sort_key=sort_key,
@@ -40,16 +41,13 @@ TTL created_at + INTERVAL {ttl_days} DAY
     )
 
 
-def _drop_cleanup_snapshot_table_sql(table_name: str, on_cluster: bool) -> str:
-    return """
-DROP TABLE IF EXISTS {table_name} {on_cluster_clause}
-""".format(
-        table_name=table_name,
-        on_cluster_clause=ON_CLUSTER_CLAUSE(on_cluster),
-    )
+def _drop_cleanup_snapshot_table_sql(table_name: str) -> str:
+    return f"""
+DROP TABLE IF EXISTS {table_name}
+"""
 
 
-def CLEANUP_DELETED_PERSONS_TABLE_SQL(on_cluster=True):
+def CLEANUP_DELETED_PERSONS_TABLE_SQL():
     """Persons the run will delete, one row each, with the version the run observed as latest.
 
     `max_version` bounds the delete so a version written after the snapshot survives a run that
@@ -60,11 +58,10 @@ def CLEANUP_DELETED_PERSONS_TABLE_SQL(on_cluster=True):
         CLEANUP_DELETED_PERSONS_TABLE,
         "team_id Int64, person_id UUID, max_version UInt64",
         "team_id, person_id",
-        on_cluster,
     )
 
 
-def CLEANUP_REVIVED_PERSONS_TABLE_SQL(on_cluster=True):
+def CLEANUP_REVIVED_PERSONS_TABLE_SQL():
     """Snapshotted persons that came back to life mid-run, and so must not be deleted.
 
     Every dictionary over the worklists anti-joins this table, which is how a checkpoint drops a
@@ -74,11 +71,10 @@ def CLEANUP_REVIVED_PERSONS_TABLE_SQL(on_cluster=True):
         CLEANUP_REVIVED_PERSONS_TABLE,
         "team_id Int64, person_id UUID",
         "team_id, person_id",
-        on_cluster,
     )
 
 
-def CLEANUP_ORPHANED_DISTINCT_IDS_TABLE_SQL(on_cluster=True):
+def CLEANUP_ORPHANED_DISTINCT_IDS_TABLE_SQL():
     """Distinct id mappings the run will delete, with the reason each one qualified.
 
     `own_tombstone` distinguishes a mapping deleted in its own right from one deleted because its
@@ -88,34 +84,32 @@ def CLEANUP_ORPHANED_DISTINCT_IDS_TABLE_SQL(on_cluster=True):
         CLEANUP_ORPHANED_DISTINCT_IDS_TABLE,
         "team_id Int64, distinct_id String, person_id UUID, own_tombstone UInt8, max_version Int64",
         "team_id, distinct_id",
-        on_cluster,
     )
 
 
-def CLEANUP_REVIVED_DISTINCT_IDS_TABLE_SQL(on_cluster=True):
+def CLEANUP_REVIVED_DISTINCT_IDS_TABLE_SQL():
     """Snapshotted distinct id mappings that stopped qualifying mid-run."""
     return _cleanup_snapshot_table_sql(
         CLEANUP_REVIVED_DISTINCT_IDS_TABLE,
         "team_id Int64, distinct_id String",
         "team_id, distinct_id",
-        on_cluster,
     )
 
 
-def DROP_CLEANUP_DELETED_PERSONS_TABLE_SQL(on_cluster=True):
-    return _drop_cleanup_snapshot_table_sql(CLEANUP_DELETED_PERSONS_TABLE, on_cluster)
+def DROP_CLEANUP_DELETED_PERSONS_TABLE_SQL():
+    return _drop_cleanup_snapshot_table_sql(CLEANUP_DELETED_PERSONS_TABLE)
 
 
-def DROP_CLEANUP_REVIVED_PERSONS_TABLE_SQL(on_cluster=True):
-    return _drop_cleanup_snapshot_table_sql(CLEANUP_REVIVED_PERSONS_TABLE, on_cluster)
+def DROP_CLEANUP_REVIVED_PERSONS_TABLE_SQL():
+    return _drop_cleanup_snapshot_table_sql(CLEANUP_REVIVED_PERSONS_TABLE)
 
 
-def DROP_CLEANUP_ORPHANED_DISTINCT_IDS_TABLE_SQL(on_cluster=True):
-    return _drop_cleanup_snapshot_table_sql(CLEANUP_ORPHANED_DISTINCT_IDS_TABLE, on_cluster)
+def DROP_CLEANUP_ORPHANED_DISTINCT_IDS_TABLE_SQL():
+    return _drop_cleanup_snapshot_table_sql(CLEANUP_ORPHANED_DISTINCT_IDS_TABLE)
 
 
-def DROP_CLEANUP_REVIVED_DISTINCT_IDS_TABLE_SQL(on_cluster=True):
-    return _drop_cleanup_snapshot_table_sql(CLEANUP_REVIVED_DISTINCT_IDS_TABLE, on_cluster)
+def DROP_CLEANUP_REVIVED_DISTINCT_IDS_TABLE_SQL():
+    return _drop_cleanup_snapshot_table_sql(CLEANUP_REVIVED_DISTINCT_IDS_TABLE)
 
 
 CLEANUP_SNAPSHOT_TABLES = (
@@ -140,13 +134,7 @@ DROP_CLEANUP_SNAPSHOT_TABLE_SQL = (
 )
 
 
-def TRUNCATE_CLEANUP_SNAPSHOT_TABLES_SQL(on_cluster=False):
-    # Unqualified and cluster-free by default so the test harness can match these against the
-    # tables ClickHouse reports as empty and skip the keeper round-trip.
-    return [
-        "TRUNCATE TABLE IF EXISTS {table_name} {on_cluster_clause}".format(
-            table_name=table_name,
-            on_cluster_clause=ON_CLUSTER_CLAUSE(on_cluster),
-        )
-        for table_name in CLEANUP_SNAPSHOT_TABLES
-    ]
+def TRUNCATE_CLEANUP_SNAPSHOT_TABLES_SQL():
+    # Unqualified so the test harness can match these against the tables ClickHouse reports as
+    # empty and skip the keeper round-trip.
+    return [f"TRUNCATE TABLE IF EXISTS {table_name}" for table_name in CLEANUP_SNAPSHOT_TABLES]
