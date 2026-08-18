@@ -102,7 +102,7 @@ export const buildSqlBoxPlotModel = (
 
     const xAxisColumn = findColumn(columns, settings.xAxisColumn)
     const seriesColumn = findColumn(columns, settings.seriesColumn)
-    if (!xAxisColumn && rows.length > 1) {
+    if (!xAxisColumn && !seriesColumn && rows.length > 1) {
         return emptyModel('Select an X-axis column when the query returns more than one row.')
     }
 

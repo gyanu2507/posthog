@@ -79,12 +79,12 @@ describe('sqlBoxPlotAdapter', () => {
             error: 'Row 1 has statistics in the wrong order. Expected min <= p25 <= median <= p75 <= max.',
         },
         {
-            name: 'several rows without an x-axis',
+            name: 'several rows without an x-axis or series',
             rows: [
                 ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
                 ['Tue', 'Free', 1, 2, 3, 4, 5, 6],
             ],
-            boxPlotSettings: { ...settings, xAxisColumn: undefined },
+            boxPlotSettings: { ...settings, xAxisColumn: undefined, seriesColumn: undefined },
             error: 'Select an X-axis column when the query returns more than one row.',
         },
         {
@@ -139,6 +139,32 @@ describe('sqlBoxPlotAdapter', () => {
                 key: 'Distribution',
                 label: 'Distribution',
                 data: [{ min: 1, p25: 2, median: 3, mean: 4, p75: 5, max: 6 }],
+            },
+        ])
+    })
+
+    test('groups by series when the query returns one row per series without an x-axis', () => {
+        const model = buildSqlBoxPlotModel(
+            [
+                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+                ['Mon', 'Paid', 7, 8, 9, 10, 11, 12],
+            ],
+            columns,
+            { ...settings, xAxisColumn: undefined }
+        )
+
+        expect(model.error).toBeNull()
+        expect(model.labels).toEqual(['Distribution'])
+        expect(model.series).toEqual([
+            {
+                key: 'Free',
+                label: 'Free',
+                data: [{ min: 1, p25: 2, median: 3, mean: 4, p75: 5, max: 6 }],
+            },
+            {
+                key: 'Paid',
+                label: 'Paid',
+                data: [{ min: 7, p25: 8, median: 9, mean: 10, p75: 11, max: 12 }],
             },
         ])
     })
