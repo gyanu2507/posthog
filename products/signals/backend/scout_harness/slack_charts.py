@@ -98,12 +98,14 @@ def _acting_user(run: SignalScoutRun, team: Team) -> User | None:
     """The user the scout ran as; the render is attributed to and access-checked against them.
 
     Delivery runs in a worker with no request to authenticate that user, so a creator who has since
-    been deactivated or left the org yields no principal, the way other background renders treat
-    a revoked creator."""
+    been deactivated, left the org, or lost access to a private project yields no principal. The
+    membership test is the same one the runner uses to pick the acting user in the first place."""
     task_run = getattr(run, "task_run", None)
     task = getattr(task_run, "task", None)
     user = getattr(task, "created_by", None)
     if user is None or creator_access_revoked(user, team):
+        return None
+    if not team.all_users_with_access().filter(id=user.id).exists():
         return None
     return user
 

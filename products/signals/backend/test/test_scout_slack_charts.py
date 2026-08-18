@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 from posthog.test.base import BaseTest
 from unittest.mock import MagicMock, patch
 
@@ -95,15 +97,29 @@ class TestScoutSlackReportCharts(BaseTest):
         assert titles == ["*Chart c4*", "*Chart c1*", "*Chart c0*"]
         assert render_mock.call_count == MAX_SLACK_REPORT_CHARTS
 
-    @parameterized.expand([("no_acting_user", None), ("deactivated_acting_user", "inactive"), ("no_charts", "user")])
+    @parameterized.expand(
+        [
+            ("no_acting_user", None),
+            ("deactivated_acting_user", "inactive"),
+            ("acting_user_without_project_access", "no_project_access"),
+            ("no_charts", "user"),
+        ]
+    )
     def test_returns_nothing_without_a_principal_or_charts(self, _name, actor) -> None:
         if actor == "inactive":
             self.user.is_active = False
             self.user.save(update_fields=["is_active"])
+        access_patch = (
+            patch("products.signals.backend.scout_harness.slack_charts.Team.all_users_with_access")
+            if actor == "no_project_access"
+            else nullcontext()
+        )
         run = self._make_run(created_by=self.user if actor else None)
         report = self._make_report([_chart("trend", _TRENDS)] if actor != "user" else [])
         render, url = self._patched_render()
-        with render as render_mock, url:
+        with render as render_mock, url, access_patch as access_mock:
+            if access_mock is not None:
+                access_mock.return_value.filter.return_value.exists.return_value = False
             assert build_scout_report_chart_blocks(report, run) == []
         render_mock.assert_not_called()
 

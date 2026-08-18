@@ -1270,15 +1270,16 @@ def _do_edit_report(
         # and skips queueing work that would no-op.
         report_status = get_scout_report_status(team_id=team.id, report_id=report_id)
         if report_status is not None and _surfaced(report_status):
-            # A note-only edit leaves the title and summary the Slack report message shows
+            # A note-only edit leaves the title, summary and charts the Slack report message shows
             # unchanged, so re-posting it would duplicate the message already in the channel.
             # Deliver the note itself instead; any edit that rewrote the content re-posts the
             # report as before.
+            note_only = note_appended and not updated_fields and not charts_changed
             queue_configured_scout_slack_delivery(
                 run_id=run.id,
                 output_type="report",
                 output_id=report_id,
-                edit_note=append_note if note_appended and not updated_fields else None,
+                edit_note=append_note if note_only else None,
             )
     return result
 
