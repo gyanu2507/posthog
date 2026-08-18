@@ -342,8 +342,9 @@ database "posthog" {
   }
 
   table "clickhouse_cleanup_deleted_persons" {
-    order_by = ["run_id", "team_id", "person_id"]
-    ttl      = "created_at + toIntervalDay(14)"
+    order_by     = ["run_id", "team_id", "person_id"]
+    partition_by = "run_id"
+    ttl          = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity   = "8192"
       ttl_only_drop_parts = "1"
@@ -361,8 +362,8 @@ database "posthog" {
       type = "UInt64"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_deleted_persons"
@@ -372,8 +373,9 @@ database "posthog" {
   }
 
   table "clickhouse_cleanup_orphaned_distinct_ids" {
-    order_by = ["run_id", "team_id", "distinct_id"]
-    ttl      = "created_at + toIntervalDay(14)"
+    order_by     = ["run_id", "team_id", "distinct_id"]
+    partition_by = "run_id"
+    ttl          = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity   = "8192"
       ttl_only_drop_parts = "1"
@@ -397,8 +399,8 @@ database "posthog" {
       type = "Int64"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_orphaned_distinct_ids"
@@ -408,8 +410,9 @@ database "posthog" {
   }
 
   table "clickhouse_cleanup_revived_distinct_ids" {
-    order_by = ["run_id", "team_id", "distinct_id"]
-    ttl      = "created_at + toIntervalDay(14)"
+    order_by     = ["run_id", "team_id", "distinct_id"]
+    partition_by = "run_id"
+    ttl          = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity   = "8192"
       ttl_only_drop_parts = "1"
@@ -424,8 +427,8 @@ database "posthog" {
       type = "String"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_revived_distinct_ids"
@@ -435,8 +438,9 @@ database "posthog" {
   }
 
   table "clickhouse_cleanup_revived_persons" {
-    order_by = ["run_id", "team_id", "person_id"]
-    ttl      = "created_at + toIntervalDay(14)"
+    order_by     = ["run_id", "team_id", "person_id"]
+    partition_by = "run_id"
+    ttl          = "created_at + toIntervalDay(14)"
     settings = {
       index_granularity   = "8192"
       ttl_only_drop_parts = "1"
@@ -451,8 +455,8 @@ database "posthog" {
       type = "UUID"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_revived_persons"
