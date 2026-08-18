@@ -1,5 +1,7 @@
 import React, { useCallback, useMemo } from 'react'
 
+import { ChartLegend } from '../../components/Legend/ChartLegend'
+import { useChartLegend } from '../../components/Legend/useChartLegend'
 import { drawBoxes, drawBoxHighlight, drawGrid, type DrawContext } from '../../core/canvas-renderer'
 import { Chart } from '../../core/Chart'
 import { ChartErrorBoundary } from '../../core/ChartErrorBoundary'
@@ -9,6 +11,7 @@ import type {
     ChartConfig,
     ChartDimensions,
     ChartDrawArgs,
+    ChartLegendConfig,
     ChartScales,
     ChartTheme,
     CreateScalesFn,
@@ -50,6 +53,7 @@ export type BoxPlotTooltipContext<Meta = unknown> = TooltipContext<BoxPlotAdapte
  *  horizontal mode — so it's omitted from the consumer-visible config to avoid silently
  *  ignored values. */
 export interface BoxPlotConfig extends Omit<ChartConfig, 'axisOrientation'> {
+    legend?: ChartLegendConfig
     /** Mean marker radius in CSS pixels. Defaults to 3. */
     meanRadius?: number
     /** Whisker cap width as a fraction of the box width. Defaults to 0.6. */
@@ -120,8 +124,6 @@ function BoxPlotInner<Meta = unknown>({
         boxStrokeWidth = 1.5,
     } = config ?? {}
 
-    const grouped = series.filter((s) => !s.visibility?.excluded).length > 1
-
     const adaptedSeries = useMemo<Series<BoxPlotAdaptedMeta<Meta>>[]>(
         () =>
             series.map((s) => ({
@@ -138,19 +140,22 @@ function BoxPlotInner<Meta = unknown>({
         [series, labels.length]
     )
 
+    const { visibleSeries, legendProps } = useChartLegend(adaptedSeries, theme, config?.legend)
+    const grouped = visibleSeries.filter((s) => !s.visibility?.excluded).length > 1
+
     /** Synthetic series carrying min/max samples so the y-domain spans every whisker, not just
-     *  the medians on `adaptedSeries.data`. Fed to `createBarScales` (as `stackedSeries`) for
-     *  the d3 scale and to `Chart` (as `valueRangeSeries`) for `useChartMargins` tick sizing —
-     *  one source, two call sites. */
+     *  the medians. Fed to `createBarScales` (as `stackedSeries`) for the d3 scale and to `Chart`
+     *  (as `valueRangeSeries`) for `useChartMargins` tick sizing, so hidden series cannot affect
+     *  either calculation. */
     const valueRangeSeries = useMemo<Series[]>(() => {
         const out: Series[] = []
-        for (const s of series) {
+        for (const s of visibleSeries) {
             if (s.visibility?.excluded) {
                 continue
             }
             const mins: number[] = []
             const maxs: number[] = []
-            for (const datum of s.data) {
+            for (const datum of s.meta?.datums ?? []) {
                 if (!datum) {
                     continue
                 }
@@ -169,7 +174,7 @@ function BoxPlotInner<Meta = unknown>({
             }
         }
         return out
-    }, [series])
+    }, [visibleSeries])
 
     const { datumsByKey, seriesByKey } = useMemo(() => {
         const datums = new Map<string, (BoxPlotDatum | null)[]>()
@@ -371,21 +376,23 @@ function BoxPlotInner<Meta = unknown>({
     )
 
     return (
-        <Chart<BoxPlotAdaptedMeta<Meta>>
-            series={adaptedSeries}
-            labels={labels}
-            config={{ ...config, axisOrientation: 'vertical' }}
-            theme={theme}
-            createScales={createScales}
-            drawStatic={drawStatic}
-            drawHover={drawHover}
-            tooltip={renderTooltip}
-            onPointClick={onPointClick}
-            valueRangeSeries={valueRangeSeries.length > 0 ? valueRangeSeries : undefined}
-            className={className}
-            dataAttr={dataAttr}
-        >
-            {children}
-        </Chart>
+        <ChartLegend {...legendProps} legendDataAttr="hog-chart-box-plot-legend">
+            <Chart<BoxPlotAdaptedMeta<Meta>>
+                series={visibleSeries}
+                labels={labels}
+                config={{ ...config, axisOrientation: 'vertical' }}
+                theme={theme}
+                createScales={createScales}
+                drawStatic={drawStatic}
+                drawHover={drawHover}
+                tooltip={renderTooltip}
+                onPointClick={onPointClick}
+                valueRangeSeries={valueRangeSeries.length > 0 ? valueRangeSeries : undefined}
+                className={className}
+                dataAttr={dataAttr}
+            >
+                {children}
+            </Chart>
+        </ChartLegend>
     )
 }

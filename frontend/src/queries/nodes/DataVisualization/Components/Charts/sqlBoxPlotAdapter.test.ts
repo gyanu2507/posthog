@@ -1,0 +1,157 @@
+import { BoxPlotSettings } from '~/queries/schema/schema-general'
+
+import { Column } from '../../dataVisualizationLogic'
+import { buildSqlBoxPlotModel, getAutoBoxPlotSettings } from './sqlBoxPlotAdapter'
+
+const columns: Column[] = [
+    { name: 'bucket', label: 'bucket', dataIndex: 0, type: { name: 'STRING', isNumerical: false } },
+    { name: 'series', label: 'series', dataIndex: 1, type: { name: 'STRING', isNumerical: false } },
+    { name: 'min', label: 'min', dataIndex: 2, type: { name: 'FLOAT', isNumerical: true } },
+    { name: 'p25', label: 'p25', dataIndex: 3, type: { name: 'FLOAT', isNumerical: true } },
+    { name: 'median', label: 'median', dataIndex: 4, type: { name: 'FLOAT', isNumerical: true } },
+    { name: 'mean', label: 'mean', dataIndex: 5, type: { name: 'FLOAT', isNumerical: true } },
+    { name: 'p75', label: 'p75', dataIndex: 6, type: { name: 'FLOAT', isNumerical: true } },
+    { name: 'max', label: 'max', dataIndex: 7, type: { name: 'FLOAT', isNumerical: true } },
+]
+
+const settings: BoxPlotSettings = {
+    xAxisColumn: 'bucket',
+    seriesColumn: 'series',
+    minColumn: 'min',
+    p25Column: 'p25',
+    medianColumn: 'median',
+    meanColumn: 'mean',
+    p75Column: 'p75',
+    maxColumn: 'max',
+}
+
+describe('sqlBoxPlotAdapter', () => {
+    test('builds grouped series and leaves missing combinations empty', () => {
+        const model = buildSqlBoxPlotModel(
+            [
+                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+                ['Tue', 'Paid', 10, 20, 30, 40, 50, 60],
+                ['Mon', 'Paid', 7, 8, 9, 10, 11, 12],
+            ],
+            columns,
+            settings
+        )
+
+        expect(model.error).toBeNull()
+        expect(model.labels).toEqual(['Mon', 'Tue'])
+        expect(model.series).toEqual([
+            {
+                key: 'Free',
+                label: 'Free',
+                data: [{ min: 1, p25: 2, median: 3, mean: 4, p75: 5, max: 6 }, null],
+            },
+            {
+                key: 'Paid',
+                label: 'Paid',
+                data: [
+                    { min: 7, p25: 8, median: 9, mean: 10, p75: 11, max: 12 },
+                    { min: 10, p25: 20, median: 30, mean: 40, p75: 50, max: 60 },
+                ],
+            },
+        ])
+    })
+
+    test.each([
+        {
+            name: 'missing mappings',
+            rows: [['Mon', 'Free', 1, 2, 3, 4, 5, 6]],
+            boxPlotSettings: { ...settings, medianColumn: undefined },
+            error: 'Select a column for Median.',
+        },
+        {
+            name: 'duplicate bucket and series pairs',
+            rows: [
+                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+            ],
+            boxPlotSettings: settings,
+            error: 'Rows 1 and 2 use the same X-axis and series values. Return one row for each box.',
+        },
+        {
+            name: 'invalid summary order',
+            rows: [['Mon', 'Free', 1, 4, 3, 3, 5, 6]],
+            boxPlotSettings: settings,
+            error: 'Row 1 has statistics in the wrong order. Expected min <= p25 <= median <= p75 <= max.',
+        },
+        {
+            name: 'several rows without an x-axis',
+            rows: [
+                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+                ['Tue', 'Free', 1, 2, 3, 4, 5, 6],
+            ],
+            boxPlotSettings: { ...settings, xAxisColumn: undefined },
+            error: 'Select an X-axis column when the query returns more than one row.',
+        },
+    ])('reports $name', ({ rows, boxPlotSettings, error }) => {
+        expect(buildSqlBoxPlotModel(rows, columns, boxPlotSettings).error).toBe(error)
+    })
+
+    test('uses one distribution when the query returns one row without grouping columns', () => {
+        const model = buildSqlBoxPlotModel(
+            [[1, 2, 3, 4, 5, 6]],
+            columns.slice(2).map((column, dataIndex) => ({ ...column, dataIndex })),
+            {
+                minColumn: 'min',
+                p25Column: 'p25',
+                medianColumn: 'median',
+                meanColumn: 'mean',
+                p75Column: 'p75',
+                maxColumn: 'max',
+            }
+        )
+
+        expect(model.labels).toEqual(['Distribution'])
+        expect(model.series).toEqual([
+            {
+                key: 'Distribution',
+                label: 'Distribution',
+                data: [{ min: 1, p25: 2, median: 3, mean: 4, p75: 5, max: 6 }],
+            },
+        ])
+    })
+
+    test.each([
+        { excludeOutliers: true, expectedMin: -4, expectedMax: 12 },
+        { excludeOutliers: false, expectedMin: -100, expectedMax: 100 },
+    ])(
+        'sets whiskers to $expectedMin and $expectedMax when excludeOutliers is $excludeOutliers',
+        ({ excludeOutliers, expectedMin, expectedMax }) => {
+            const model = buildSqlBoxPlotModel([['Mon', 'Free', -100, 2, 3, 4, 6, 100]], columns, {
+                ...settings,
+                excludeOutliers,
+            })
+
+            expect(model.series[0].data[0]).toEqual({
+                min: expectedMin,
+                p25: 2,
+                median: 3,
+                mean: 4,
+                p75: 6,
+                max: expectedMax,
+            })
+        }
+    )
+
+    test('auto-maps conventional aliases and preserves valid choices', () => {
+        const autoSettings = getAutoBoxPlotSettings(columns, {
+            xAxisColumn: 'bucket',
+            meanColumn: 'median',
+        })
+
+        expect(autoSettings).toEqual({
+            xAxisColumn: 'bucket',
+            seriesColumn: 'series',
+            minColumn: 'min',
+            p25Column: 'p25',
+            medianColumn: 'median',
+            meanColumn: 'median',
+            p75Column: 'p75',
+            maxColumn: 'max',
+        })
+    })
+})

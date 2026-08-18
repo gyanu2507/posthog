@@ -1,4 +1,8 @@
-import { cleanup, render, waitFor } from '@testing-library/react'
+import '@testing-library/jest-dom'
+
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+
+import type { BoxPlotSeries } from '@posthog/quill-charts'
 
 import { DataVisualizationNode, HogQLQueryResponse, NodeKind } from '~/queries/schema/schema-general'
 import { initKeaTests } from '~/test/init'
@@ -12,10 +16,19 @@ type LemonTableMockProps = {
 }
 
 let mockLatestLemonTableProps: LemonTableMockProps | null = null
+let mockLatestBoxPlotProps: { labels: string[]; series: BoxPlotSeries[] } | null = null
 const mockLemonTable = jest.fn((props: LemonTableMockProps): null => {
     mockLatestLemonTableProps = props
     return null
 })
+
+jest.mock('@posthog/quill-charts', () => ({
+    ...jest.requireActual('@posthog/quill-charts'),
+    BoxPlot: (props: { labels: string[]; series: BoxPlotSeries[] }): JSX.Element => {
+        mockLatestBoxPlotProps = props
+        return <div data-attr="mock-sql-box-plot" />
+    },
+}))
 
 jest.mock('@posthog/lemon-ui', () => ({
     ...jest.requireActual('@posthog/lemon-ui'),
@@ -44,11 +57,90 @@ describe('DataTableVisualization', () => {
     beforeEach(() => {
         initKeaTests()
         mockLatestLemonTableProps = null
+        mockLatestBoxPlotProps = null
         mockLemonTable.mockClear()
     })
 
     afterEach(() => {
         cleanup()
+    })
+
+    it('renders grouped SQL box plot results', async () => {
+        const boxPlotQuery: DataVisualizationNode = {
+            ...query,
+            display: ChartDisplayType.BoxPlot,
+            chartSettings: {
+                boxPlot: {
+                    xAxisColumn: 'bucket',
+                    seriesColumn: 'series',
+                    minColumn: 'min',
+                    p25Column: 'p25',
+                    medianColumn: 'median',
+                    meanColumn: 'mean',
+                    p75Column: 'p75',
+                    maxColumn: 'max',
+                    excludeOutliers: false,
+                },
+            },
+        }
+        const boxPlotResults: HogQLQueryResponse = {
+            results: [
+                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+                ['Mon', 'Paid', 7, 8, 9, 10, 11, 12],
+            ],
+            columns: ['bucket', 'series', 'min', 'p25', 'median', 'mean', 'p75', 'max'],
+            types: [
+                ['bucket', 'String'],
+                ['series', 'String'],
+                ['min', 'Float64'],
+                ['p25', 'Float64'],
+                ['median', 'Float64'],
+                ['mean', 'Float64'],
+                ['p75', 'Float64'],
+                ['max', 'Float64'],
+            ],
+        }
+
+        render(
+            <DataTableVisualization
+                uniqueKey="data-visualization-box-plot"
+                query={boxPlotQuery}
+                setQuery={jest.fn()}
+                cachedResults={boxPlotResults}
+                readOnly
+                embedded
+            />
+        )
+
+        await screen.findByTestId('mock-sql-box-plot')
+        expect(mockLatestBoxPlotProps).toMatchObject({
+            labels: ['Mon'],
+            series: [
+                { key: 'Free', label: 'Free' },
+                { key: 'Paid', label: 'Paid' },
+            ],
+        })
+    })
+
+    it('explains how to fix invalid SQL box plot results', async () => {
+        const boxPlotQuery: DataVisualizationNode = {
+            ...query,
+            display: ChartDisplayType.BoxPlot,
+            chartSettings: { boxPlot: {} },
+        }
+
+        render(
+            <DataTableVisualization
+                uniqueKey="data-visualization-invalid-box-plot"
+                query={boxPlotQuery}
+                setQuery={jest.fn()}
+                cachedResults={{ results: [[1]], columns: ['value'], types: [['value', 'Float64']] }}
+                readOnly
+                embedded
+            />
+        )
+
+        expect(await screen.findByText('Select a column for Minimum.')).toBeInTheDocument()
     })
 
     test.each([
