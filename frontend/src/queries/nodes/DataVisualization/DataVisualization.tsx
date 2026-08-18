@@ -7,8 +7,6 @@ import { IconGear } from '@posthog/icons'
 import { LemonButton, LemonDivider } from '@posthog/lemon-ui'
 
 import { ExportButton } from 'lib/components/ExportButton/ExportButton'
-import { FEATURE_FLAGS } from 'lib/constants'
-import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { useAttachedLogic } from 'lib/logic/scenes/useAttachedLogic'
 import { InsightErrorState, StatelessInsightLoadingState } from 'scenes/insights/EmptyStates'
 import { insightDataLogic } from 'scenes/insights/insightDataLogic'
@@ -194,8 +192,6 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
 
     const { seriesBreakdownData } = useValues(seriesBreakdownLogic({ key: dataVisualizationProps.key }))
     const { goalLines } = useValues(displayLogic)
-    const { featureFlags } = useValues(featureFlagLogic)
-    const sqlBoxPlotsEnabled = !!featureFlags[FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]
 
     // Overlay alert threshold bounds on the chart, like trends does — only when rendering a saved
     // insight (the SQL editor and other unsaved contexts have no alerts to show). Deliberately maps
@@ -249,10 +245,7 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
                 <StatelessInsightLoadingState queryId={queryId} pollResponse={pollResponse} />
             </div>
         )
-    } else if (
-        effectiveVisualizationType === ChartDisplayType.ActionsTable ||
-        (effectiveVisualizationType === ChartDisplayType.BoxPlot && !sqlBoxPlotsEnabled)
-    ) {
+    } else if (effectiveVisualizationType === ChartDisplayType.ActionsTable) {
         component = (
             <Table
                 uniqueKey={props.uniqueKey}
@@ -309,7 +302,7 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
                 presetChartHeight={presetChartHeight}
             />
         )
-    } else if (effectiveVisualizationType === ChartDisplayType.BoxPlot && sqlBoxPlotsEnabled) {
+    } else if (effectiveVisualizationType === ChartDisplayType.BoxPlot) {
         const rows = ('results' in response ? response.results : 'result' in response ? response.result : []) ?? []
         component = (
             <SqlBoxPlot

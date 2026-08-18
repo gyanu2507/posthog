@@ -57,6 +57,42 @@ describe('DataTableVisualization', () => {
         types: [['number', 'Int64']],
     }
 
+    const boxPlotQuery: DataVisualizationNode = {
+        ...query,
+        display: ChartDisplayType.BoxPlot,
+        chartSettings: {
+            boxPlot: {
+                xAxisColumn: 'bucket',
+                seriesColumn: 'series',
+                minColumn: 'min',
+                p25Column: 'p25',
+                medianColumn: 'median',
+                meanColumn: 'mean',
+                p75Column: 'p75',
+                maxColumn: 'max',
+                excludeOutliers: false,
+            },
+        },
+    }
+
+    const boxPlotResults: HogQLQueryResponse = {
+        results: [
+            ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
+            ['Mon', 'Paid', 7, 8, 9, 10, 11, 12],
+        ],
+        columns: ['bucket', 'series', 'min', 'p25', 'median', 'mean', 'p75', 'max'],
+        types: [
+            ['bucket', 'String'],
+            ['series', 'String'],
+            ['min', 'Float64'],
+            ['p25', 'Float64'],
+            ['median', 'Float64'],
+            ['mean', 'Float64'],
+            ['p75', 'Float64'],
+            ['max', 'Float64'],
+        ],
+    }
+
     beforeEach(() => {
         initKeaTests()
         featureFlagLogic.mount()
@@ -71,48 +107,14 @@ describe('DataTableVisualization', () => {
         featureFlagLogic.unmount()
     })
 
-    it('renders grouped SQL box plot results when the feature is enabled', async () => {
-        featureFlagLogic.actions.setFeatureFlags([FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT], {
-            [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]: true,
+    test.each([true, false])('renders saved SQL box plots when the feature flag is %s', async (flagEnabled) => {
+        featureFlagLogic.actions.setFeatureFlags(flagEnabled ? [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT] : [], {
+            [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]: flagEnabled,
         })
-        const boxPlotQuery: DataVisualizationNode = {
-            ...query,
-            display: ChartDisplayType.BoxPlot,
-            chartSettings: {
-                boxPlot: {
-                    xAxisColumn: 'bucket',
-                    seriesColumn: 'series',
-                    minColumn: 'min',
-                    p25Column: 'p25',
-                    medianColumn: 'median',
-                    meanColumn: 'mean',
-                    p75Column: 'p75',
-                    maxColumn: 'max',
-                    excludeOutliers: false,
-                },
-            },
-        }
-        const boxPlotResults: HogQLQueryResponse = {
-            results: [
-                ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
-                ['Mon', 'Paid', 7, 8, 9, 10, 11, 12],
-            ],
-            columns: ['bucket', 'series', 'min', 'p25', 'median', 'mean', 'p75', 'max'],
-            types: [
-                ['bucket', 'String'],
-                ['series', 'String'],
-                ['min', 'Float64'],
-                ['p25', 'Float64'],
-                ['median', 'Float64'],
-                ['mean', 'Float64'],
-                ['p75', 'Float64'],
-                ['max', 'Float64'],
-            ],
-        }
 
         render(
             <DataTableVisualization
-                uniqueKey="data-visualization-box-plot"
+                uniqueKey={`data-visualization-box-plot-${flagEnabled}`}
                 query={boxPlotQuery}
                 setQuery={jest.fn()}
                 cachedResults={boxPlotResults}
@@ -131,32 +133,7 @@ describe('DataTableVisualization', () => {
         })
     })
 
-    it('shows SQL box plots as tables when the feature is disabled', async () => {
-        const boxPlotQuery: DataVisualizationNode = {
-            ...query,
-            display: ChartDisplayType.BoxPlot,
-            chartSettings: { boxPlot: {} },
-        }
-
-        render(
-            <DataTableVisualization
-                uniqueKey="data-visualization-disabled-box-plot"
-                query={boxPlotQuery}
-                setQuery={jest.fn()}
-                cachedResults={cachedResults}
-                readOnly
-                embedded
-            />
-        )
-
-        await waitFor(() => expect(mockLemonTable).toHaveBeenCalled())
-        expect(mockLatestBoxPlotProps).toBeNull()
-    })
-
     it('explains how to fix invalid SQL box plot results', async () => {
-        featureFlagLogic.actions.setFeatureFlags([FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT], {
-            [FEATURE_FLAGS.SQL_BOX_PLOT_INSIGHT]: true,
-        })
         const boxPlotQuery: DataVisualizationNode = {
             ...query,
             display: ChartDisplayType.BoxPlot,
