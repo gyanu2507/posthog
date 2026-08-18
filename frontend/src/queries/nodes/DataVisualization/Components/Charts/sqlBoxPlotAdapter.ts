@@ -36,6 +36,10 @@ export const BOX_PLOT_STATISTICS: {
 ]
 
 const MAX_BOX_PLOT_CELLS = 10_000
+// The cell cap alone permits thousands of series under a single X-axis value, so limit series
+// independently because each one adds a legend row and per-hover work. Matches MAX_SERIES in
+// sqlLineGraphAdapter.
+const MAX_BOX_PLOT_SERIES = 200
 
 const emptyModel = (error: string | null = null): SqlBoxPlotModel => ({ labels: [], series: [], error })
 
@@ -175,6 +179,11 @@ export const buildSqlBoxPlotModel = (
         if (!seriesLabelSet.has(seriesLabel)) {
             seriesLabels.push(seriesLabel)
             seriesLabelSet.add(seriesLabel)
+            if (seriesLabelSet.size > MAX_BOX_PLOT_SERIES) {
+                return emptyModel(
+                    'The box plot has too many series. Reduce the number of distinct series values in the query result.'
+                )
+            }
         }
         if (labelSet.size * seriesLabelSet.size > MAX_BOX_PLOT_CELLS) {
             return emptyModel('The box plot has too many X-axis and series combinations. Reduce the query result.')

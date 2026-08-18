@@ -119,6 +119,14 @@ describe('sqlBoxPlotAdapter', () => {
         )
     })
 
+    test('rejects more series than the series limit even when the cell matrix stays small', () => {
+        const rows = Array.from({ length: 201 }, (_, series) => ['Mon', series, 1, 2, 3, 4, 5, 6])
+
+        expect(buildSqlBoxPlotModel(rows, columns, settings).error).toBe(
+            'The box plot has too many series. Reduce the number of distinct series values in the query result.'
+        )
+    })
+
     test('uses one distribution when the query returns one row without grouping columns', () => {
         const model = buildSqlBoxPlotModel(
             [[1, 2, 3, 4, 5, 6]],
