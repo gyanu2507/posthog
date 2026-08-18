@@ -11,6 +11,18 @@ import { AccessControlLevel, AccessControlResourceType } from '~/types'
 
 import __sqlBoxPlot from '../../../mocks/fixtures/api/projects/team_id/insights/sqlBoxPlot.json'
 
+const availableSources = {
+    Postgres: { name: 'Postgres', iconPath: '/static/services/postgres.png', fields: [], caption: '', featured: true },
+    Stripe: { name: 'Stripe', iconPath: '/static/services/stripe.png', fields: [], caption: '', featured: true },
+    GoogleAds: {
+        name: 'GoogleAds',
+        iconPath: '/static/services/google-ads.png',
+        fields: [],
+        caption: '',
+        featured: true,
+    },
+}
+
 type Story = StoryObj<{}>
 
 const grantWarehouseAccess: Decorator = function GrantWarehouseAccess(Story): JSX.Element {
@@ -52,6 +64,10 @@ const meta: Meta = {
         mswDecorator({
             get: {
                 '/api/projects/:team_id/groups_types': [],
+                '/api/projects/:team_id/query_tab_state/user': null,
+                '/api/projects/:team_id/external_data_sources/connections': [],
+                '/api/projects/:team_id/external_data_sources/direct_connection_options': [],
+                '/api/environments/:team_id/external_data_sources/wizard': availableSources,
             },
         }),
     ],
@@ -71,20 +87,23 @@ export const EditOptions: Story = {
         },
     },
     play: async ({ canvasElement }): Promise<void> => {
-        const settingsButton = await waitFor(() => {
-            const button = canvasElement.querySelector<HTMLElement>(
-                '[data-attr="sql-editor-visualization-settings-button"]'
-            )
-            if (!button) {
-                throw new Error('Visualization settings button not ready')
-            }
-            return button
-        })
-        await userEvent.click(settingsButton)
-        await waitFor(() => {
-            if (!canvasElement.querySelector('[data-attr="box-plot-minColumn"]')) {
-                throw new Error('Box plot settings not ready')
-            }
-        })
+        await waitFor(
+            async () => {
+                if (canvasElement.querySelector('[data-attr="box-plot-minColumn"]')) {
+                    return
+                }
+                const settingsButton = canvasElement.querySelector<HTMLElement>(
+                    '[data-attr="sql-editor-visualization-settings-button"]'
+                )
+                if (!settingsButton) {
+                    throw new Error('Visualization settings button not ready')
+                }
+                await userEvent.click(settingsButton)
+                if (!canvasElement.querySelector('[data-attr="box-plot-minColumn"]')) {
+                    throw new Error('Box plot settings not ready')
+                }
+            },
+            { timeout: 10_000 }
+        )
     },
 }
