@@ -5204,6 +5204,10 @@ snapshots:
         hash: v1.k794b7964.d553cecf3e544087316e1687404c8e2b3a6c19f618a05e09880e60e656054f23.hNkLLb04XLyd-PQJa59WwPhgRAxMbW5fSDzCnowJKBs
     products-workflows-customerioimportmodal--step-4-track-not-configured--light:
         hash: v1.k794b7964.0954891b73cdc0b1bce1275fa11a5fa4af2055b83b518bce82f3fde886097659.mgEq2W8sZg7x-vt8z2EpwEHPBGRzPI1GWtn-9tu-46o
+    products-workflows-template-library-cards--all-template-kinds--dark:
+        hash: v1.k794b7964.9dc28ba2d60965c1657ee941dceee6b09c8a851f2501ee3be5c4a9138e4ff506.-NfCdRJeXNbSwa9v0Fq0PfyfLZJ5ixC2IvxO8Tn85Cs
+    products-workflows-template-library-cards--all-template-kinds--light:
+        hash: v1.k794b7964.ca540b0ba6781c2f2f098c9d65598e09f0921414ae6455b950d1b6cf795aaf28.i8URdpU60hGKcpoj6aShohE7CFba1XsOSn8uE_TB-Xk
     queries-webvitals--web-vitals--dark:
         hash: v1.k794b7964.2ae778a0c5fdba3c69dfcbd3e9589c3c3d9cc2f0fef2eefd304c565be7e9a7c9.hH71byl33sIAdRCgaPk1lDOev0qooW1xhv0AL_yrIvg
     queries-webvitals--web-vitals--light:
