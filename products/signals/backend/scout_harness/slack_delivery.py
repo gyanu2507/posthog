@@ -12,6 +12,7 @@ from slack_sdk.errors import SlackApiError
 from posthog.models.integration import Integration, SlackIntegration
 
 from products.signals.backend.models import SignalReport, SignalScoutEmission, SignalScoutRun
+from products.signals.backend.scout_harness.slack_charts import build_scout_report_chart_blocks
 from products.signals.backend.slack_formatting import (
     escape_slack_mrkdwn,
     markdown_to_slack_mrkdwn,
@@ -266,11 +267,14 @@ def build_scout_report_slack_message(report: SignalReport, run: SignalScoutRun) 
         {"type": "header", "text": {"type": "plain_text", "text": header}},
     ]
 
+    # Chart links in the prose still reduce to their label; the charts themselves follow the prose
+    # as image blocks, the way the inbox places charts the summary doesn't reference inline.
     summary_text = strip_chart_references((report.summary or "").strip())
     rendered_summary = truncate_slack_section(markdown_to_slack_mrkdwn(summary_text))
     if rendered_summary:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": rendered_summary}})
 
+    blocks.extend(build_scout_report_chart_blocks(report, run))
     blocks.append(_report_link_block(report))
     fallback = f"Scout · {escape_slack_mrkdwn(scout_name)}: {escape_slack_mrkdwn(header[:200])}"
     return blocks, fallback

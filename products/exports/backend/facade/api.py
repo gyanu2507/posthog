@@ -164,6 +164,7 @@ def render_png_export(
     created_by: User,
     export_context: dict | None = None,
     insight_id: int | None = None,
+    insight_short_id: str | None = None,
 ) -> tuple[ExportedAsset, bytes | None]:
     """Render a PNG export synchronously and return the asset together with its content bytes.
 
@@ -174,17 +175,19 @@ def render_png_export(
         # Access control below resolves against created_by; a principal-less render would
         # silently skip it, so service callers must attribute the render to a real user.
         raise ValueError("created_by is required")
-    if (export_context is None) == (insight_id is None):
-        raise ValueError("Provide exactly one of export_context or insight_id")
+    if sum(value is not None for value in (export_context, insight_id, insight_short_id)) != 1:
+        raise ValueError("Provide exactly one of export_context, insight_id or insight_short_id")
     if export_context is not None:
         _validate_adhoc_export_context(export_context)
-    if insight_id is not None:
-        insight = Insight.objects.filter(id=insight_id, team_id=team.id, deleted=False).first()
+    if insight_id is not None or insight_short_id is not None:
+        insight_filter = {"id": insight_id} if insight_id is not None else {"short_id": insight_short_id}
+        insight = Insight.objects.filter(team_id=team.id, deleted=False, **insight_filter).first()
         # Object-level access matters here: created_by may not be allowed to view the insight.
         if insight is None or not UserAccessControl(user=created_by, team=team).check_access_level_for_object(
             insight, "viewer"
         ):
             raise ValueError("Insight not found")
+        insight_id = insight.id
 
     asset = ExportedAsset.objects.create(
         team=team,

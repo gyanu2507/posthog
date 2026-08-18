@@ -1,8 +1,13 @@
+from posthog.test.base import BaseTest
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 
 from parameterized import parameterized
 
-from products.exports.backend.facade.api import _validate_adhoc_export_context
+from products.exports.backend.facade.api import _validate_adhoc_export_context, render_png_export
+from products.exports.backend.models.exported_asset import ExportedAsset
+from products.product_analytics.backend.models.insight import Insight
 
 
 class TestValidateAdhocExportContext(SimpleTestCase):
@@ -22,3 +27,37 @@ class TestValidateAdhocExportContext(SimpleTestCase):
     def test_rejects_unwrapped_sources(self, _name, export_context):
         with self.assertRaises(ValueError):
             _validate_adhoc_export_context(export_context)
+
+
+class TestRenderPngExportInsightLookup(BaseTest):
+    def _render(self, **kwargs):
+        with patch("products.exports.backend.facade.api.async_to_sync") as async_to_sync:
+
+            def _stash_content(_coro):
+                def _run():
+                    asset = ExportedAsset.objects.get(team=self.team)
+                    asset.content = b"png"
+                    asset.save(update_fields=["content"])
+
+                return _run
+
+            async_to_sync.side_effect = _stash_content
+            return render_png_export(team=self.team, created_by=self.user, **kwargs)
+
+    def test_short_id_resolves_to_the_teams_insight(self):
+        insight = Insight.objects.create(team=self.team, short_id="abc123xy", query={"kind": "InsightVizNode"})
+
+        asset, png = self._render(insight_short_id=insight.short_id)
+
+        assert asset.insight_id == insight.id
+        assert png == b"png"
+
+    @parameterized.expand(
+        [
+            ("unknown_short_id", {"insight_short_id": "nope0000"}),
+            ("short_id_and_id", {"insight_short_id": "abc123xy", "insight_id": 1}),
+        ]
+    )
+    def test_rejects_unresolvable_or_ambiguous_insight_selectors(self, _name, kwargs):
+        with self.assertRaises(ValueError):
+            render_png_export(team=self.team, created_by=self.user, **kwargs)
