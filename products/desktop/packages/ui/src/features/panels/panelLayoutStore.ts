@@ -2,6 +2,7 @@ import { channelDisplayLabel } from "@posthog/core/canvas/channelName";
 import {
   addRecentFile,
   addActionTab as coreAddActionTab,
+  addBrowserTab as coreAddBrowserTab,
   addTerminalTab as coreAddTerminalTab,
   closeOtherTabs as coreCloseOtherTabs,
   closeTab as coreCloseTab,
@@ -13,6 +14,7 @@ import {
   openTabInSplit as coreOpenTabInSplit,
   reorderTabs as coreReorderTabs,
   setActiveTab as coreSetActiveTab,
+  updateBrowserTabUrl as coreUpdateBrowserTabUrl,
   updateSizes as coreUpdateSizes,
   updateTabLabel as coreUpdateTabLabel,
   updateTabMetadata as coreUpdateTabMetadata,
@@ -113,6 +115,8 @@ export interface PanelLayoutStore {
   updateTabLabel: (taskId: string, tabId: string, label: string) => void;
   setFocusedPanel: (taskId: string, panelId: string) => void;
   addTerminalTab: (taskId: string, panelId: string) => void;
+  addBrowserTab: (taskId: string, panelId: string) => void;
+  updateBrowserTabUrl: (taskId: string, tabId: string, url: string) => void;
   addActionTab: (
     taskId: string,
     panelId: string,
@@ -505,6 +509,32 @@ export const usePanelLayoutStore = createWithEqualityFn<PanelLayoutStore>()(
             taskId,
             (layout) =>
               coreAddTerminalTab(layout, panelId) as Partial<TaskLayout>,
+          ),
+        );
+      },
+
+      addBrowserTab: (taskId, panelId) => {
+        set((state) =>
+          updateTaskLayout(
+            state,
+            taskId,
+            (layout) =>
+              coreAddBrowserTab(layout, panelId) as Partial<TaskLayout>,
+          ),
+        );
+      },
+
+      updateBrowserTabUrl: (taskId, tabId, url) => {
+        set((state) =>
+          updateTaskLayout(
+            state,
+            taskId,
+            (layout) =>
+              coreUpdateBrowserTabUrl(
+                layout,
+                tabId,
+                url,
+              ) as Partial<TaskLayout>,
           ),
         );
       },

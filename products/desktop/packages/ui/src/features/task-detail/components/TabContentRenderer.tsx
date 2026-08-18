@@ -5,6 +5,7 @@ import {
   LazyCloudReviewPage as CloudReviewPage,
   LazyReviewPage as ReviewPage,
 } from "../../code-review/components/LazyReviewPages";
+import { BrowserPanel } from "../../embedded-browser/BrowserPanel";
 import type { Tab } from "../../panels/panelTypes";
 import { PiSessionView } from "../../pi-sessions/PiSessionView";
 import { ArtifactPreview } from "../../sessions/components/ArtifactPreview";
@@ -42,6 +43,15 @@ export function TabContentRenderer({
     case "terminal":
       return (
         <TaskShellPanel taskId={taskId} task={task} shellId={data.terminalId} />
+      );
+
+    case "browser":
+      return (
+        <BrowserPanel
+          taskId={taskId}
+          tabId={data.browserId}
+          initialUrl={data.url}
+        />
       );
 
     case "file":
