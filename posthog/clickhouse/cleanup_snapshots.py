@@ -20,6 +20,10 @@ CLEANUP_SNAPSHOT_TTL_DAYS = 14
 
 
 def _cleanup_snapshot_table_sql(table_name: str, columns: str, sort_key: str) -> str:
+    # Partitioning by run id makes clearing a finished run a metadata-only DROP PARTITION instead
+    # of a mutation that rewrites every part. created_at is the ReplacingMergeTree version, and
+    # its sub-second resolution is what makes a retried populate deterministic: two inserts of the
+    # same key in the same second would otherwise tie and let merge order pick the survivor.
     # ttl_only_drop_parts stops TTL merges from rewriting a part that holds any expired row; the
     # TTL is a backstop for failed runs, so reclaiming whole parts late beats weekly rewrites.
     return """
@@ -27,8 +31,9 @@ CREATE TABLE IF NOT EXISTS {table_name}
 (
     run_id String,
     {columns},
-    created_at DateTime DEFAULT now()
+    created_at DateTime64(6, 'UTC') DEFAULT now64()
 ) ENGINE = {engine}
+PARTITION BY run_id
 ORDER BY (run_id, {sort_key})
 TTL created_at + INTERVAL {ttl_days} DAY
 SETTINGS ttl_only_drop_parts = 1

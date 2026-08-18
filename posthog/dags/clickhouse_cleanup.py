@@ -154,12 +154,24 @@ class SnapshotTable:
         )
         return [row[0] for row in rows]
 
+    def distinct_key_count(self, client: Client) -> int:
+        # Deduplicated, so the number is stable whether or not a merge has collapsed the
+        # duplicate rows a retried populate leaves behind.
+        [[count]] = client.execute(
+            f"SELECT count() FROM (SELECT {self.keys} FROM {self.qualified_name}"
+            f" WHERE run_id = %(run_id)s GROUP BY {self.keys})",
+            {"run_id": self.run_id},
+        )
+        return count
+
     def sync_replica(self, client: Client) -> None:
         client.execute(f"SYSTEM SYNC REPLICA {self.qualified_name} STRICT")
 
-    def delete_rows(self, client: Client) -> None:
+    def drop_run_partition(self, client: Client) -> None:
+        # The table is partitioned by run_id, so clearing a run is a metadata-only partition drop
+        # rather than a mutation that rewrites every part. A missing partition is a no-op.
         client.execute(
-            f"ALTER TABLE {self.qualified_name} DELETE WHERE run_id = %(run_id)s",
+            f"ALTER TABLE {self.qualified_name} DROP PARTITION %(run_id)s",
             {"run_id": self.run_id},
         )
 
@@ -339,10 +351,15 @@ class SnapshotDictionary(ClusterDictionary):
 
     @property
     def query(self) -> str:
+        # Aggregated because a retried populate leaves duplicate key rows until a merge collapses
+        # them, and an unaggregated read would hand the dictionary an arbitrary one. max() picks
+        # the newest bound, matching the row the sub-second version column keeps at merge time.
         return f"""
-            SELECT {self.key_columns}, max_version FROM {self.source.qualified_name}
+            SELECT {self.key_columns}, max(max_version) AS max_version
+            FROM {self.source.qualified_name}
             WHERE run_id = '{self.source.run_id}'
               AND ({self.key_columns}) NOT IN ({self.excluded.run_keys_query})
+            GROUP BY {self.key_columns}
         """
 
     @property
@@ -375,6 +392,10 @@ class CleanupRun:
     dictionary_load_timeout: int
     mutation_stall_timeout: int
     distinct_ids_deleted_at: datetime | None = None
+    # Distinct key counts recorded when each snapshot was taken. The deletes assert against them,
+    # so a snapshot the 14-day TTL reaped mid-run fails the run instead of under-deleting silently.
+    persons_count: int = 0
+    orphaned_count: int = 0
 
     @classmethod
     def for_run(cls, run_id: str, config: CleanupConfig) -> "CleanupRun":
@@ -463,9 +484,9 @@ def snapshot_deleted_persons(
     # The insert lands on one host, but every host reads this table when the dictionary loads.
     cluster.map_all_hosts(run.persons.sync_replica).result()
 
-    count = cluster.any_host_by_role(run.persons.count, NodeRole.DATA).result()
+    count = cluster.any_host_by_role(run.persons.distinct_key_count, NodeRole.DATA).result()
     context.add_output_metadata({"deleted_persons": dagster.MetadataValue.int(count)})
-    return run
+    return replace(run, persons_count=count)
 
 
 @dagster.op
@@ -483,9 +504,9 @@ def snapshot_orphaned_distinct_ids(
     cluster.map_all_hosts(run.orphaned.sync_replica).result()
     _create_dictionary(cluster, run.orphaned_dictionary, run)
 
-    count = cluster.any_host_by_role(run.orphaned.count, NodeRole.DATA).result()
+    count = cluster.any_host_by_role(run.orphaned.distinct_key_count, NodeRole.DATA).result()
     context.add_output_metadata({"orphaned_distinct_ids": dagster.MetadataValue.int(count)})
-    return run
+    return replace(run, orphaned_count=count)
 
 
 def recheck_revived_persons(name: str) -> dagster.OpDefinition:
@@ -806,6 +827,21 @@ def _run_ordered_delete(
     return batches
 
 
+def _require_snapshot_intact(cluster: ClickhouseCluster, table: SnapshotTable, recorded: int) -> None:
+    """Fail the run if the snapshot lost rows since it was recorded.
+
+    The 14-day TTL drops a run's partition unconditionally, so a run stalled past it would
+    otherwise sweep from a silently shrunken worklist, and nothing would distinguish
+    "under-deleted" from "had fewer rows".
+    """
+    current = cluster.any_host_by_role(table.distinct_key_count, NodeRole.DATA).result()
+    if current != recorded:
+        raise dagster.Failure(
+            f"{table.table_name} holds {current} keys for this run but {recorded} were snapshotted;"
+            " the snapshot TTL has likely expired mid-run, so re-run from a fresh snapshot"
+        )
+
+
 @dagster.op
 def delete_orphaned_distinct_ids(
     context: dagster.OpExecutionContext,
@@ -817,6 +853,7 @@ def delete_orphaned_distinct_ids(
         context.log.info("dry run: skipping the delete from %s", PERSON_DISTINCT_ID2_TABLE)
         return run
 
+    _require_snapshot_intact(cluster, run.orphaned, run.orphaned_count)
     ranges = _team_ranges(cluster.any_host_by_role(run.orphaned.team_ids, NodeRole.DATA).result(), run.team_batches)
     context.add_output_metadata({"team_ranges": dagster.MetadataValue.int(len(ranges))})
 
@@ -930,6 +967,7 @@ def delete_persons(
         context.log.info("dry run: skipping the delete from %s", PERSONS_TABLE)
         return run
 
+    _require_snapshot_intact(cluster, run.persons, run.persons_count)
     ranges = _team_ranges(cluster.any_host_by_role(run.persons.team_ids, NodeRole.DATA).result(), run.team_batches)
     context.add_output_metadata({"team_ranges": dagster.MetadataValue.int(len(ranges))})
 
@@ -964,7 +1002,7 @@ def drop_snapshot_assets(
     # The TTL would reap these anyway. Clearing them now keeps the shared tables small enough that
     # a run's own rows stay cheap to read.
     for table in run.all_tables:
-        cluster.any_host_by_role(table.delete_rows, NodeRole.DATA).result()
+        cluster.any_host_by_role(table.drop_run_partition, NodeRole.DATA).result()
 
 
 @dagster.failure_hook(required_resource_keys={"cluster"})
