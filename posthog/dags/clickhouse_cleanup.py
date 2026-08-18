@@ -155,9 +155,11 @@ class SnapshotTable:
     def sync_replica(self, client: Client) -> None:
         client.execute(f"SYSTEM SYNC REPLICA {self.qualified_name} STRICT")
 
-    def delete_rows(self, client: Client) -> None:
+    def drop_run_partition(self, client: Client) -> None:
+        # The table is partitioned by run_id, so clearing a run is a metadata-only partition drop
+        # rather than a mutation that rewrites every part. A missing partition is a no-op.
         client.execute(
-            f"ALTER TABLE {self.qualified_name} DELETE WHERE run_id = %(run_id)s",
+            f"ALTER TABLE {self.qualified_name} DROP PARTITION %(run_id)s",
             {"run_id": self.run_id},
         )
 
@@ -1022,7 +1024,7 @@ def drop_snapshot_assets(
     # The TTL would reap these anyway. Clearing them now keeps the shared tables small enough that
     # a run's own rows stay cheap to read.
     for table in run.all_tables:
-        cluster.any_host_by_role(table.delete_rows, NodeRole.DATA).result()
+        cluster.any_host_by_role(table.drop_run_partition, NodeRole.DATA).result()
 
 
 @dagster.failure_hook(required_resource_keys={"cluster"})
