@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import json
+import hashlib
 from collections.abc import Callable
 from datetime import timedelta
 from time import monotonic
@@ -32,7 +34,8 @@ SLACK_REPORT_CHART_URL_TTL = timedelta(days=30)
 
 # The delivery task retries the whole message when Slack fails, and its backoff can span hours.
 # Rendered asset ids are remembered per delivery for longer than that, so a retry re-posts the
-# same PNGs instead of launching every export workflow again.
+# same PNGs instead of launching every export workflow again. Entries are keyed by chart id plus a
+# fingerprint of the query, since an edit may swap a chart's query under the same id.
 _RENDERED_ASSETS_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 # The exporter renders an InsightVizNode-wrapped query; a SavedInsightNode is rendered through the
@@ -109,6 +112,11 @@ def _rendered_assets_cache_key(delivery_id: str) -> str:
     return f"signals_scout:slack_report_chart_assets:{delivery_id}"
 
 
+def _rendered_asset_entry_key(chart_id: str, query: dict) -> str:
+    fingerprint = hashlib.sha256(json.dumps(query, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return f"{chart_id}:{fingerprint}"
+
+
 # The cache only saves re-renders on retry; if it is down the message must still go out, so both
 # sides degrade to "no reuse" rather than raising into the delivery task.
 def _load_rendered_assets(cache_key: str | None) -> dict[str, int]:
@@ -167,7 +175,8 @@ def build_scout_report_chart_blocks(
         if not isinstance(query, dict) or query.get("kind") not in _RENDERABLE_CHART_KINDS:
             continue
         chart_id = str(chart.get("chart_id"))
-        asset_id = rendered_assets.get(chart_id)
+        entry_key = _rendered_asset_entry_key(chart_id, query)
+        asset_id = rendered_assets.get(entry_key)
         if (
             asset_id is None
             and clock() - started + RENDER_TIMEOUT.total_seconds() > SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS
@@ -193,7 +202,7 @@ def build_scout_report_chart_blocks(
             continue
         if image_url is None:
             continue
-        rendered_assets[chart_id] = asset_id
+        rendered_assets[entry_key] = asset_id
         blocks.extend(_chart_blocks(chart, image_url))
     _store_rendered_assets(cache_key, rendered_assets)
     return blocks

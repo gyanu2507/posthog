@@ -144,6 +144,21 @@ class TestScoutSlackReportCharts(BaseTest):
 
         assert [b["image_url"] for b in blocks if b["type"] == "image"] == ["https://img/1"]
 
+    def test_retry_re_renders_a_chart_whose_query_changed(self) -> None:
+        cache.clear()
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart("a", _TRENDS)])
+        render, url = self._patched_render()
+        with render as render_mock, url as url_mock:
+            render_mock.side_effect = [(MagicMock(id=7), b"png"), (MagicMock(id=8), b"png")]
+            url_mock.side_effect = lambda *, team_id, asset_id, expiry_delta: f"https://img/{asset_id}"
+            build_scout_report_chart_blocks(report, run, delivery_id="delivery-3")
+            report.charts = [_chart("a", {**_TRENDS, "source": {"kind": "TrendsQuery", "series": [{"event": "x"}]}})]
+            report.save(update_fields=["charts"])
+            second = build_scout_report_chart_blocks(report, run, delivery_id="delivery-3")
+
+        assert [b["image_url"] for b in second if b["type"] == "image"] == ["https://img/8"]
+
     def test_cache_outage_still_delivers_charts(self) -> None:
         run = self._make_run(created_by=self.user)
         report = self._make_report([_chart("a", _TRENDS)])
