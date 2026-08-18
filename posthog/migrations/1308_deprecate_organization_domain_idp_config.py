@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("posthog", "1306_add_youtube_analytics_integration_kind")]
+    dependencies = [("posthog", "1307_remove_personlessdistinctid")]
 
     operations = [
         migrations.SeparateDatabaseAndState(

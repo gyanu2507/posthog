@@ -2,11 +2,20 @@ from importlib import import_module
 
 from posthog.test.base import BaseTest
 
-from django.apps import apps
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 
 from posthog.models import IdentityProviderConfig, LinkedIdentityProviderConfig, OrganizationDomain
 
 migration = import_module("posthog.migrations.1288_backfill_linked_identity_provider_configs")
+
+
+def migration_apps():
+    return (
+        MigrationExecutor(connection)
+        .loader.project_state([("posthog", "1288_backfill_linked_identity_provider_configs")])
+        .apps
+    )
 
 
 class TestLinkedIdentityProviderConfigBackfill(BaseTest):
@@ -23,7 +32,7 @@ class TestLinkedIdentityProviderConfigBackfill(BaseTest):
             domain="unlinked.example.com",
         )
 
-        migration.backfill_linked_identity_provider_configs(apps, None)
+        migration.backfill_linked_identity_provider_configs(migration_apps(), None)
 
         assert list(
             LinkedIdentityProviderConfig.objects.values_list("organization_domain_id", "identity_provider_config_id")
@@ -38,8 +47,8 @@ class TestLinkedIdentityProviderConfigBackfill(BaseTest):
             _identity_provider_config=config,
         )
 
-        migration.backfill_linked_identity_provider_configs(apps, None)
-        migration.backfill_linked_identity_provider_configs(apps, None)
+        migration.backfill_linked_identity_provider_configs(migration_apps(), None)
+        migration.backfill_linked_identity_provider_configs(migration_apps(), None)
 
         assert (
             LinkedIdentityProviderConfig.objects.filter(

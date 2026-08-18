@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from posthog.test.base import BaseTest
 
-from django.apps import apps
 from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 
 from posthog.models.identity_provider_config import IdentityProviderConfig
 from posthog.models.organization_domain import OrganizationDomain
@@ -16,6 +16,12 @@ migration_module = importlib.import_module("ee.migrations.0058_backfill_scim_pro
 backfill_scim_provisioned_user_config = migration_module.backfill_scim_provisioned_user_config
 
 SCHEMA_EDITOR = SimpleNamespace(connection=connection)
+
+
+def migration_apps():
+    return (
+        MigrationExecutor(connection).loader.project_state([("ee", "0058_backfill_scim_provisioned_user_config")]).apps
+    )
 
 
 class TestBackfillSCIMProvisionedUserConfig(BaseTest):
@@ -43,7 +49,7 @@ class TestBackfillSCIMProvisionedUserConfig(BaseTest):
     def test_backfills_the_config_linked_to_the_record_domain(self):
         record = self._create_record(self.provisioned_user, self.domain)
 
-        backfill_scim_provisioned_user_config(apps, SCHEMA_EDITOR)
+        backfill_scim_provisioned_user_config(migration_apps(), SCHEMA_EDITOR)
 
         record.refresh_from_db()
         assert record.identity_provider_config_id == self.config.id
@@ -60,7 +66,7 @@ class TestBackfillSCIMProvisionedUserConfig(BaseTest):
         first_record = self._create_record(self.provisioned_user, self.domain)
         second_record = self._create_record(self.provisioned_user, second_domain)
 
-        backfill_scim_provisioned_user_config(apps, SCHEMA_EDITOR)
+        backfill_scim_provisioned_user_config(migration_apps(), SCHEMA_EDITOR)
 
         first_record.refresh_from_db()
         second_record.refresh_from_db()

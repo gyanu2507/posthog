@@ -2,12 +2,21 @@ from importlib import import_module
 
 from posthog.test.base import BaseTest
 
-from django.apps import apps
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
 
 from posthog.models import IdentityProviderConfig, OrganizationDomain
 
 migration = import_module("posthog.migrations.1286_cleanup_orphaned_identity_provider_configs")
+
+
+def migration_apps():
+    return (
+        MigrationExecutor(connection)
+        .loader.project_state([("posthog", "1286_cleanup_orphaned_identity_provider_configs")])
+        .apps
+    )
 
 
 class TestCleanupOrphanedIdentityProviderConfigs(BaseTest):
@@ -28,7 +37,7 @@ class TestCleanupOrphanedIdentityProviderConfigs(BaseTest):
             _identity_provider_config=linked_config,
         )
 
-        migration.delete_orphaned_identity_provider_configs(apps, None)
+        migration.delete_orphaned_identity_provider_configs(migration_apps(), None)
 
         assert not IdentityProviderConfig.objects.filter(pk=orphaned_config.pk).exists()
         assert IdentityProviderConfig.objects.filter(pk=linked_config.pk).exists()
@@ -38,6 +47,6 @@ class TestCleanupOrphanedIdentityProviderConfigs(BaseTest):
         # the frontend links it in a follow-up request
         in_progress_config = IdentityProviderConfig.objects.create(organization=self.organization)
 
-        migration.delete_orphaned_identity_provider_configs(apps, None)
+        migration.delete_orphaned_identity_provider_configs(migration_apps(), None)
 
         assert IdentityProviderConfig.objects.filter(pk=in_progress_config.pk).exists()
