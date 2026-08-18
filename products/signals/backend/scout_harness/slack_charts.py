@@ -14,7 +14,6 @@ import structlog
 from posthog.models import Team, User
 from posthog.query_creator_access import creator_access_revoked
 
-from products.exports.backend.facade.api import RENDER_TIMEOUT, get_delivery_image_url, render_png_export
 from products.signals.backend.models import SignalReport, SignalScoutRun
 from products.signals.backend.slack_formatting import escape_slack_mrkdwn
 
@@ -66,6 +65,10 @@ def _ordered_charts(report: SignalReport) -> list[dict]:
 
 
 def _render_chart_asset_id(*, team: Team, created_by: User, query: dict) -> int | None:
+    # The exports facade drags temporalio and the query schema in with it, and the signals app's
+    # startup wiring reaches this module, so the facade stays off the django.setup() path.
+    from products.exports.backend.facade.api import render_png_export  # noqa: PLC0415
+
     kind = query.get("kind")
     if kind == "SavedInsightNode":
         short_id = query.get("shortId")
@@ -157,6 +160,8 @@ def build_scout_report_chart_blocks(
     The cap counts attempts, not successes: a report full of failing charts must not launch an
     export workflow per chart. With a `delivery_id`, successful renders are remembered so a retry
     of the same delivery reuses them."""
+    from products.exports.backend.facade.api import RENDER_TIMEOUT, get_delivery_image_url  # noqa: PLC0415
+
     charts = _ordered_charts(report)
     if not charts:
         return []

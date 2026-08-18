@@ -48,8 +48,8 @@ class TestScoutSlackReportCharts(BaseTest):
         )
 
     def _patched_render(self):
-        render = patch("products.signals.backend.scout_harness.slack_charts.render_png_export")
-        url = patch("products.signals.backend.scout_harness.slack_charts.get_delivery_image_url")
+        render = patch("products.exports.backend.facade.api.render_png_export")
+        url = patch("products.exports.backend.facade.api.get_delivery_image_url")
         return render, url
 
     def test_renders_supported_charts_and_skips_the_rest_without_failing(self) -> None:
