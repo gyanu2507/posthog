@@ -1092,6 +1092,10 @@ def run_cleanup_sweep_after_deletes(
                 dagster.DagsterRunStatus.NOT_STARTED,
                 dagster.DagsterRunStatus.STARTING,
                 dagster.DagsterRunStatus.STARTED,
+                # A run being canceled still counts: cancellation skips the failure hook, so its
+                # last submitted mutation keeps applying server-side. Once fully canceled, any
+                # straggler mutation is held off the tables by wait_for_mutation_capacity instead.
+                dagster.DagsterRunStatus.CANCELING,
             ],
         ),
         limit=1,

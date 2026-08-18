@@ -830,11 +830,19 @@ def test_the_sweep_sensor_launches_a_real_run_after_deletes():
     assert request.run_key == "11111111-1111-1111-1111-111111111111"
 
 
-def test_the_sweep_sensor_skips_while_a_sweep_is_already_active():
+@pytest.mark.parametrize(
+    "status",
+    [
+        dagster.DagsterRunStatus.STARTED,
+        # A canceling run's last mutation keeps applying server-side, so it still counts as active.
+        dagster.DagsterRunStatus.CANCELING,
+    ],
+)
+def test_the_sweep_sensor_skips_while_a_sweep_is_already_active(status: dagster.DagsterRunStatus):
     # Two concurrent sweeps would mutate person and person_distinct_id2 at the same time, which
     # is the contention this sensor exists to prevent.
     instance = dagster.DagsterInstance.ephemeral()
-    instance.create_run_for_job(job_def=clickhouse_deletion_sweep_job, status=dagster.DagsterRunStatus.STARTED)
+    instance.create_run_for_job(job_def=clickhouse_deletion_sweep_job, status=status)
 
     result = clickhouse_cleanup.run_cleanup_sweep_after_deletes(_deletes_success_context(instance))
     assert isinstance(result, dagster.SkipReason)
