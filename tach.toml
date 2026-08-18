@@ -715,6 +715,9 @@ depends_on = [
     "products.data_warehouse",
     "products.error_tracking",
     "products.experiments",
+    # Facade-only: scout report Slack delivery renders report charts to PNG through the
+    # exports facade and mints their delivery urls there.
+    "products.exports",
     "products.feature_flags",
     "products.notebooks",
     "products.product_analytics",
