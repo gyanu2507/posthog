@@ -1,11 +1,14 @@
 import itertools
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta
+from functools import partial
 from uuid import UUID
 
 import pytest
 from unittest.mock import patch
 
+import dagster
 import psycopg2
 from clickhouse_driver import Client
 
@@ -645,6 +648,44 @@ def test_team_ranges_cover_every_candidate_team_exactly_once():
 def test_more_batches_than_teams_does_not_produce_empty_ranges():
     ranges = clickhouse_cleanup._team_ranges([5, 6], batches=10)
     assert ranges == [clickhouse_cleanup.TeamRange(low=5, high=5), clickhouse_cleanup.TeamRange(low=6, high=6)]
+
+
+@pytest.mark.django_db
+def test_a_retried_snapshot_populate_cannot_skew_the_dictionary(cluster: ClickhouseCluster):
+    # An op retry re-runs populate, leaving duplicate key rows until a merge collapses them. The
+    # dictionary must read the newest max_version bound, not whichever duplicate it happens upon.
+    person = create_person(team_id=TEAM_ID, version=0, is_deleted=True)
+    table = clickhouse_cleanup.DeletedPersonsTable(run_id="retry_run")
+    cluster.any_host(table.populate).result()
+    # The person gains a higher deleted version between the attempt and its retry.
+    create_person(uuid=person, team_id=TEAM_ID, version=3, is_deleted=True)
+    cluster.any_host(table.populate).result()
+    cluster.map_all_hosts(table.sync_replica).result()
+
+    dictionary = clickhouse_cleanup.SnapshotDictionary(
+        source=table, excluded=clickhouse_cleanup.RevivedPersonsTable(run_id="retry_run")
+    )
+    try:
+        cluster.map_all_hosts(partial(dictionary.create, shards=1, max_execution_time=0, max_memory_usage=0)).result()
+        cluster.map_all_hosts(partial(dictionary.load, timeout_seconds=60), concurrency=1).result()
+        rows = cluster.any_host(
+            lambda client: client.execute(f"SELECT person_id, max_version FROM {dictionary.qualified_name}")
+        ).result()
+        assert rows == [(UUID(person), 3)]
+    finally:
+        cluster.map_all_hosts(dictionary.drop).result()
+        cluster.any_host(table.drop_run_partition).result()
+
+
+@pytest.mark.django_db
+def test_a_reaped_snapshot_fails_the_delete_instead_of_under_deleting(cluster: ClickhouseCluster):
+    # The 14-day TTL drops a stalled run's partition; the delete must then fail loudly rather
+    # than sweep from a silently shrunken worklist.
+    run = clickhouse_cleanup.CleanupRun.for_run("reaped-run", clickhouse_cleanup.CleanupConfig(dry_run=False))
+    run = replace(run, persons_count=5)
+
+    with pytest.raises(dagster.Failure, match="snapshot TTL"):
+        clickhouse_cleanup.delete_persons(dagster.build_op_context(resources={"cluster": cluster}), run=run)
 
 
 T0 = datetime(2026, 1, 1, 12, 0, 0)

@@ -245,6 +245,7 @@ database "posthog" {
     }
   }
   table "clickhouse_cleanup_deleted_persons" {
+    partition_by = "run_id"
     order_by = ["run_id", "team_id", "person_id"]
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
@@ -264,8 +265,8 @@ database "posthog" {
       type = "UInt64"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_deleted_persons"
@@ -274,6 +275,7 @@ database "posthog" {
     }
   }
   table "clickhouse_cleanup_orphaned_distinct_ids" {
+    partition_by = "run_id"
     order_by = ["run_id", "team_id", "distinct_id"]
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
@@ -299,8 +301,8 @@ database "posthog" {
       type = "Int64"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_orphaned_distinct_ids"
@@ -309,6 +311,7 @@ database "posthog" {
     }
   }
   table "clickhouse_cleanup_revived_distinct_ids" {
+    partition_by = "run_id"
     order_by = ["run_id", "team_id", "distinct_id"]
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
@@ -325,8 +328,8 @@ database "posthog" {
       type = "String"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_revived_distinct_ids"
@@ -335,6 +338,7 @@ database "posthog" {
     }
   }
   table "clickhouse_cleanup_revived_persons" {
+    partition_by = "run_id"
     order_by = ["run_id", "team_id", "person_id"]
     ttl      = "created_at + toIntervalDay(14)"
     settings = {
@@ -351,8 +355,8 @@ database "posthog" {
       type = "UUID"
     }
     column "created_at" {
-      type    = "DateTime"
-      default = "now()"
+      type    = "DateTime64(6, 'UTC')"
+      default = "now64()"
     }
     engine "replicated_replacing_merge_tree" {
       zoo_path       = "/clickhouse/tables/noshard/posthog.clickhouse_cleanup_revived_persons"
