@@ -2,6 +2,7 @@ from posthog.test.base import BaseTest
 from unittest.mock import MagicMock, patch
 
 from django.apps import apps
+from django.core.cache import cache
 
 from parameterized import parameterized
 
@@ -97,6 +98,32 @@ class TestScoutSlackReportCharts(BaseTest):
         with render as render_mock, url:
             assert build_scout_report_chart_blocks(report, run) == []
         render_mock.assert_not_called()
+
+    def test_failed_renders_count_toward_the_cap(self) -> None:
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart(f"c{i}", _TRENDS) for i in range(MAX_SLACK_REPORT_CHARTS + 3)])
+        render, url = self._patched_render()
+        with render as render_mock, url:
+            render_mock.return_value = (MagicMock(id=1, exception="boom"), None)
+            assert build_scout_report_chart_blocks(report, run) == []
+        assert render_mock.call_count == MAX_SLACK_REPORT_CHARTS
+
+    def test_retry_of_the_same_delivery_reuses_rendered_assets(self) -> None:
+        cache.clear()
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart("a", _TRENDS), _chart("b", _TRENDS)])
+        render, url = self._patched_render()
+        with render as render_mock, url as url_mock:
+            render_mock.side_effect = [(MagicMock(id=7), b"png"), (MagicMock(id=8, exception="boom"), None)]
+            url_mock.side_effect = lambda *, team_id, asset_id, expiry_delta: f"https://img/{asset_id}"
+            first = build_scout_report_chart_blocks(report, run, delivery_id="delivery-1")
+            render_mock.side_effect = [(MagicMock(id=9), b"png")]
+            second = build_scout_report_chart_blocks(report, run, delivery_id="delivery-1")
+
+        assert [b["image_url"] for b in first if b["type"] == "image"] == ["https://img/7"]
+        # Only the chart that failed the first time renders again; the other reuses asset 7.
+        assert [b["image_url"] for b in second if b["type"] == "image"] == ["https://img/7", "https://img/9"]
+        assert render_mock.call_count == 3
 
     def test_url_mint_failure_skips_the_chart_but_keeps_the_rest(self) -> None:
         run = self._make_run(created_by=self.user)

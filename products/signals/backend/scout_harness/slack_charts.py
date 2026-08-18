@@ -5,6 +5,8 @@ from collections.abc import Callable
 from datetime import timedelta
 from time import monotonic
 
+from django.core.cache import cache
+
 import structlog
 
 from posthog.models import Team, User
@@ -24,6 +26,11 @@ SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS = 150
 # Slack re-fetches image_url after the message is posted, so the token has to outlive the post
 # by a comfortable margin; matches what task-run chart delivery uses.
 SLACK_REPORT_CHART_URL_TTL = timedelta(days=30)
+
+# The delivery task retries the whole message when Slack fails, and its backoff can span hours.
+# Rendered asset ids are remembered per delivery for longer than that, so a retry re-posts the
+# same PNGs instead of launching every export workflow again.
+_RENDERED_ASSETS_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 # The exporter renders an InsightVizNode-wrapped query; a SavedInsightNode is rendered through the
 # insight it points at. DataVisualizationNode (SQL) has no PNG render path yet, so it is left to
@@ -88,17 +95,26 @@ def _acting_user(run: SignalScoutRun) -> User | None:
     return getattr(task, "created_by", None)
 
 
+def _rendered_assets_cache_key(delivery_id: str) -> str:
+    return f"signals_scout:slack_report_chart_assets:{delivery_id}"
+
+
 def build_scout_report_chart_blocks(
     report: SignalReport,
     run: SignalScoutRun,
     *,
+    delivery_id: str | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> list[dict]:
     """Render the report's charts to PNGs and return Slack blocks that show them.
 
     Best effort by design: any chart that cannot be rendered — an unsupported query kind, a
     render failure, no acting user, the cap or the time budget — is skipped rather than failing the
-    delivery, since the message still links to the report where the inbox draws every chart."""
+    delivery, since the message still links to the report where the inbox draws every chart.
+
+    The cap counts attempts, not successes: a report full of failing charts must not launch an
+    export workflow per chart. With a `delivery_id`, successful renders are remembered so a retry
+    of the same delivery reuses them."""
     charts = _ordered_charts(report)
     if not charts:
         return []
@@ -107,22 +123,28 @@ def build_scout_report_chart_blocks(
         logger.info("signals_scout.slack_report_chart_no_acting_user", report_id=str(report.id), run_id=str(run.id))
         return []
 
+    cache_key = _rendered_assets_cache_key(delivery_id) if delivery_id else None
+    rendered_assets: dict[str, int] = (cache.get(cache_key) if cache_key else None) or {}
     started = clock()
     blocks: list[dict] = []
-    rendered = 0
+    attempts = 0
     for chart in charts:
-        if rendered >= MAX_SLACK_REPORT_CHARTS:
+        if attempts >= MAX_SLACK_REPORT_CHARTS:
             break
         query = chart.get("query")
         if not isinstance(query, dict) or query.get("kind") not in _RENDERABLE_CHART_KINDS:
             continue
-        if clock() - started > SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS:
+        chart_id = str(chart.get("chart_id"))
+        asset_id = rendered_assets.get(chart_id)
+        if asset_id is None and clock() - started > SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS:
             logger.info("signals_scout.slack_report_chart_budget_exhausted", report_id=str(report.id))
             break
+        attempts += 1
         try:
-            asset_id = _render_chart_asset_id(team=report.team, created_by=created_by, query=query)
             if asset_id is None:
-                continue
+                asset_id = _render_chart_asset_id(team=report.team, created_by=created_by, query=query)
+                if asset_id is None:
+                    continue
             image_url = get_delivery_image_url(
                 team_id=report.team_id, asset_id=asset_id, expiry_delta=SLACK_REPORT_CHART_URL_TTL
             )
@@ -130,12 +152,14 @@ def build_scout_report_chart_blocks(
             logger.warning(
                 "signals_scout.slack_report_chart_render_error",
                 report_id=str(report.id),
-                chart_id=chart.get("chart_id"),
+                chart_id=chart_id,
                 exc_info=True,
             )
             continue
         if image_url is None:
             continue
+        rendered_assets[chart_id] = asset_id
         blocks.extend(_chart_blocks(chart, image_url))
-        rendered += 1
+    if cache_key and rendered_assets:
+        cache.set(cache_key, rendered_assets, timeout=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
     return blocks

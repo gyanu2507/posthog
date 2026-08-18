@@ -256,7 +256,9 @@ def _report_link_block(report: SignalReport) -> dict:
     }
 
 
-def build_scout_report_slack_message(report: SignalReport, run: SignalScoutRun) -> tuple[list[dict], str]:
+def build_scout_report_slack_message(
+    report: SignalReport, run: SignalScoutRun, *, delivery_id: str | None = None
+) -> tuple[list[dict], str]:
     scout_name = _prettify_scout_name(run.skill_name)
     header = _report_header(report)
     blocks: list[dict] = [
@@ -274,7 +276,7 @@ def build_scout_report_slack_message(report: SignalReport, run: SignalScoutRun) 
     if rendered_summary:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": rendered_summary}})
 
-    blocks.extend(build_scout_report_chart_blocks(report, run))
+    blocks.extend(build_scout_report_chart_blocks(report, run, delivery_id=delivery_id))
     blocks.append(_report_link_block(report))
     fallback = f"Scout · {escape_slack_mrkdwn(scout_name)}: {escape_slack_mrkdwn(header[:200])}"
     return blocks, fallback
@@ -336,7 +338,7 @@ def post_scout_report_to_slack(
     blocks, fallback = (
         build_scout_report_note_slack_message(report, run, edit_note)
         if edit_note is not None
-        else build_scout_report_slack_message(report, run)
+        else build_scout_report_slack_message(report, run, delivery_id=delivery_id)
     )
     client = SlackIntegration(integration).client
     try:
