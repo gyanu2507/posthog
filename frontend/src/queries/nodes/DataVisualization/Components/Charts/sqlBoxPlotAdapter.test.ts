@@ -87,6 +87,24 @@ describe('sqlBoxPlotAdapter', () => {
             boxPlotSettings: { ...settings, xAxisColumn: undefined },
             error: 'Select an X-axis column when the query returns more than one row.',
         },
+        {
+            name: 'different x-axis values with the same display label',
+            rows: [
+                [null, 'Free', 1, 2, 3, 4, 5, 6],
+                ['[No value]', 'Free', 1, 2, 3, 4, 5, 6],
+            ],
+            boxPlotSettings: settings,
+            error: 'Row 2 has an X-axis value that displays as "[No value]", but another value uses the same label. Cast them to distinct strings in SQL.',
+        },
+        {
+            name: 'different series values with the same display label',
+            rows: [
+                ['Mon', null, 1, 2, 3, 4, 5, 6],
+                ['Mon', '[No value]', 1, 2, 3, 4, 5, 6],
+            ],
+            boxPlotSettings: settings,
+            error: 'Row 2 has a series value that displays as "[No value]", but another value uses the same label. Cast them to distinct strings in SQL.',
+        },
     ])('reports $name', ({ rows, boxPlotSettings, error }) => {
         expect(buildSqlBoxPlotModel(rows, columns, boxPlotSettings).error).toBe(error)
     })
@@ -147,19 +165,26 @@ describe('sqlBoxPlotAdapter', () => {
         }
     )
 
-    test('auto-maps conventional aliases and preserves valid choices', () => {
-        const autoSettings = getAutoBoxPlotSettings(columns, {
-            xAxisColumn: 'bucket',
-            meanColumn: 'median',
-        })
-
-        expect(autoSettings).toEqual({
-            xAxisColumn: 'bucket',
-            seriesColumn: 'series',
+    test.each([
+        {
+            name: 'valid choices',
+            current: { xAxisColumn: 'bucket', meanColumn: 'median' },
+            expectedGrouping: { xAxisColumn: 'bucket', seriesColumn: 'series' },
+            expectedMean: 'median',
+        },
+        {
+            name: 'explicit ungrouped choices',
+            current: { xAxisColumn: null, seriesColumn: null },
+            expectedGrouping: { xAxisColumn: null, seriesColumn: null },
+            expectedMean: 'mean',
+        },
+    ])('auto-maps conventional aliases and preserves $name', ({ current, expectedGrouping, expectedMean }) => {
+        expect(getAutoBoxPlotSettings(columns, current)).toEqual({
+            ...expectedGrouping,
             minColumn: 'min',
             p25Column: 'p25',
             medianColumn: 'median',
-            meanColumn: 'median',
+            meanColumn: expectedMean,
             p75Column: 'p75',
             maxColumn: 'max',
         })

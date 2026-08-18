@@ -49,7 +49,7 @@ export const BoxPlotSeriesTab = (): JSX.Element => {
                     value={settings.xAxisColumn ?? NONE_COLUMN}
                     options={optionalColumnOptions}
                     disabledReason={disabledReason}
-                    onChange={(value) => updateSettings({ xAxisColumn: value === NONE_COLUMN ? undefined : value })}
+                    onChange={(value) => updateSettings({ xAxisColumn: value === NONE_COLUMN ? null : value })}
                 />
                 <div className="text-xs text-secondary mt-1">Optional when the query returns one row.</div>
             </div>
@@ -62,7 +62,7 @@ export const BoxPlotSeriesTab = (): JSX.Element => {
                     value={settings.seriesColumn ?? NONE_COLUMN}
                     options={optionalColumnOptions}
                     disabledReason={disabledReason}
-                    onChange={(value) => updateSettings({ seriesColumn: value === NONE_COLUMN ? undefined : value })}
+                    onChange={(value) => updateSettings({ seriesColumn: value === NONE_COLUMN ? null : value })}
                 />
                 <div className="text-xs text-secondary mt-1">Optional. Each value becomes a separate series.</div>
             </div>

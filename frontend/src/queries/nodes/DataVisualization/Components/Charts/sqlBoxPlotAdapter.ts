@@ -41,7 +41,7 @@ const emptyModel = (error: string | null = null): SqlBoxPlotModel => ({ labels: 
 
 const findColumn = (
     columns: BoxPlotColumn[],
-    name: string | undefined,
+    name: string | null | undefined,
     numerical = false
 ): BoxPlotColumn | undefined => {
     if (!name) {
@@ -56,10 +56,10 @@ const findAliasedColumn = (columns: BoxPlotColumn[], aliases: string[], numerica
 export const getAutoBoxPlotSettings = (columns: BoxPlotColumn[], current: BoxPlotSettings = {}): BoxPlotSettings => {
     const next = { ...current }
 
-    if (!findColumn(columns, current.xAxisColumn)) {
+    if (current.xAxisColumn !== null && !findColumn(columns, current.xAxisColumn)) {
         next.xAxisColumn = findAliasedColumn(columns, ['label', 'bucket', 'date', 'day'])?.name
     }
-    if (!findColumn(columns, current.seriesColumn)) {
+    if (current.seriesColumn !== null && !findColumn(columns, current.seriesColumn)) {
         next.seriesColumn = findAliasedColumn(columns, ['series', 'breakdown'])?.name
     }
 
@@ -71,6 +71,8 @@ export const getAutoBoxPlotSettings = (columns: BoxPlotColumn[], current: BoxPlo
 
     return next
 }
+
+const groupingIdentity = (value: unknown): string => JSON.stringify([typeof value, value ?? null])
 
 const finiteNumber = (value: unknown): number | null => {
     if (value === null || value === undefined || value === '') {
@@ -109,12 +111,32 @@ export const buildSqlBoxPlotModel = (
     const seriesLabels: string[] = []
     const seriesLabelSet = new Set<string>()
     const dataBySeries = new Map<string, Map<string, BoxPlotSeries['data'][number]>>()
+    const xIdentityByLabel = new Map<string, string>()
+    const seriesIdentityByLabel = new Map<string, string>()
     const rowByPair = new Map<string, number>()
 
     for (const [rowIndex, row] of rows.entries()) {
-        const label = xAxisColumn ? String(row[xAxisColumn.dataIndex] ?? '[No value]') : 'Distribution'
-        const seriesLabel = seriesColumn ? String(row[seriesColumn.dataIndex] ?? '[No value]') : 'Distribution'
-        const pairKey = JSON.stringify([label, seriesLabel])
+        const xValue = xAxisColumn ? row[xAxisColumn.dataIndex] : 'Distribution'
+        const seriesValue = seriesColumn ? row[seriesColumn.dataIndex] : 'Distribution'
+        const label = String(xValue ?? '[No value]')
+        const seriesLabel = String(seriesValue ?? '[No value]')
+        const xIdentity = groupingIdentity(xValue)
+        const seriesIdentity = groupingIdentity(seriesValue)
+
+        if (xIdentityByLabel.has(label) && xIdentityByLabel.get(label) !== xIdentity) {
+            return emptyModel(
+                `Row ${rowIndex + 1} has an X-axis value that displays as "${label}", but another value uses the same label. Cast them to distinct strings in SQL.`
+            )
+        }
+        if (seriesIdentityByLabel.has(seriesLabel) && seriesIdentityByLabel.get(seriesLabel) !== seriesIdentity) {
+            return emptyModel(
+                `Row ${rowIndex + 1} has a series value that displays as "${seriesLabel}", but another value uses the same label. Cast them to distinct strings in SQL.`
+            )
+        }
+        xIdentityByLabel.set(label, xIdentity)
+        seriesIdentityByLabel.set(seriesLabel, seriesIdentity)
+
+        const pairKey = JSON.stringify([xIdentity, seriesIdentity])
         const previousRow = rowByPair.get(pairKey)
         if (previousRow !== undefined) {
             return emptyModel(

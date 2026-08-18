@@ -1293,8 +1293,8 @@ export interface ScatterChartSettings {
 }
 
 export interface BoxPlotSettings {
-    xAxisColumn?: string
-    seriesColumn?: string
+    xAxisColumn?: string | null
+    seriesColumn?: string | null
     minColumn?: string
     p25Column?: string
     medianColumn?: string

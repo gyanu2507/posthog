@@ -5868,10 +5868,10 @@
                     "type": "string"
                 },
                 "seriesColumn": {
-                    "type": "string"
+                    "type": ["string", "null"]
                 },
                 "xAxisColumn": {
-                    "type": "string"
+                    "type": ["string", "null"]
                 }
             },
             "type": "object"

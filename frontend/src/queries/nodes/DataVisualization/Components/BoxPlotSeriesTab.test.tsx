@@ -48,12 +48,16 @@ describe('BoxPlotSeriesTab', () => {
     it('shows box plot roles and saves a changed statistic column', async () => {
         initKeaTests()
         const setQuery = jest.fn()
+        let currentQuery = query
         const props: DataVisualizationLogicProps = {
             key: 'box-plot-series-tab',
-            query,
+            query: currentQuery,
             cachedResults,
             dataNodeCollectionId: 'box-plot-series-tab',
-            setQuery: (setter) => setQuery(setter(query)),
+            setQuery: (setter) => {
+                currentQuery = setter(currentQuery)
+                setQuery(currentQuery)
+            },
         }
 
         dataNodeLogic({
@@ -82,14 +86,22 @@ describe('BoxPlotSeriesTab', () => {
         await user.click(minimumSelect)
         await user.click(await screen.findByText('alternate_min'))
 
-        await waitFor(() =>
-            expect(setQuery).toHaveBeenLastCalledWith(
-                expect.objectContaining({
-                    chartSettings: expect.objectContaining({
-                        boxPlot: expect.objectContaining({ minColumn: 'alternate_min' }),
-                    }),
-                })
-            )
+        await waitFor(() => expect(currentQuery.chartSettings?.boxPlot?.minColumn).toBe('alternate_min'))
+
+        const xAxisSelect = container.querySelector('[data-attr="box-plot-x-axis-column"]')
+        if (!(xAxisSelect instanceof HTMLElement)) {
+            throw new Error('Expected the X-axis column selector')
+        }
+
+        await user.click(xAxisSelect)
+        const noneOption = (await screen.findAllByText('None')).find(
+            (element) => !element.closest('[data-attr="box-plot-series-column"]')
         )
+        if (!noneOption) {
+            throw new Error('Expected the None option')
+        }
+        await user.click(noneOption)
+
+        await waitFor(() => expect(currentQuery.chartSettings?.boxPlot?.xAxisColumn).toBeNull())
     })
 })
