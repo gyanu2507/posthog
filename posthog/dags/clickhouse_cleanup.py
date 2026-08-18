@@ -115,9 +115,11 @@ class DeletedPersonsTable:
         )
         return count
 
-    def delete_rows(self, client: Client) -> None:
+    def drop_run_partition(self, client: Client) -> None:
+        # The table is partitioned by run_id, so clearing a run is a metadata-only partition drop
+        # rather than a mutation that rewrites every part. A missing partition is a no-op.
         client.execute(
-            f"ALTER TABLE {self.qualified_name} DELETE WHERE run_id = %(run_id)s",
+            f"ALTER TABLE {self.qualified_name} DROP PARTITION %(run_id)s",
             {"run_id": self.run_id},
         )
 
@@ -366,7 +368,7 @@ def drop_snapshot_assets(
     cluster.map_all_hosts(dictionary.drop).result()
     # The TTL would reap these anyway. Clearing them now keeps the shared table small enough that
     # a run's own rows stay cheap to read.
-    cluster.any_host_by_role(run.persons.delete_rows, NodeRole.DATA).result()
+    cluster.any_host_by_role(run.persons.drop_run_partition, NodeRole.DATA).result()
 
 
 @dagster.failure_hook(required_resource_keys={"cluster"})
