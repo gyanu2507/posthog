@@ -10,6 +10,7 @@ from django.core.cache import cache
 import structlog
 
 from posthog.models import Team, User
+from posthog.query_creator_access import creator_access_revoked
 
 from products.exports.backend.facade.api import RENDER_TIMEOUT, get_delivery_image_url, render_png_export
 from products.signals.backend.models import SignalReport, SignalScoutRun
@@ -90,11 +91,18 @@ def _chart_blocks(chart: dict, image_url: str) -> list[dict]:
     return blocks
 
 
-def _acting_user(run: SignalScoutRun) -> User | None:
-    """The user the scout ran as; the render is attributed to and access-checked against them."""
+def _acting_user(run: SignalScoutRun, team: Team) -> User | None:
+    """The user the scout ran as; the render is attributed to and access-checked against them.
+
+    Delivery runs in a worker with no request to authenticate that user, so a creator who has since
+    been deactivated or left the org yields no principal, the way other background renders treat
+    a revoked creator."""
     task_run = getattr(run, "task_run", None)
     task = getattr(task_run, "task", None)
-    return getattr(task, "created_by", None)
+    user = getattr(task, "created_by", None)
+    if user is None or creator_access_revoked(user, team):
+        return None
+    return user
 
 
 def _rendered_assets_cache_key(delivery_id: str) -> str:
@@ -142,7 +150,7 @@ def build_scout_report_chart_blocks(
     charts = _ordered_charts(report)
     if not charts:
         return []
-    created_by = _acting_user(run)
+    created_by = _acting_user(run, report.team)
     if created_by is None:
         logger.info("signals_scout.slack_report_chart_no_acting_user", report_id=str(report.id), run_id=str(run.id))
         return []

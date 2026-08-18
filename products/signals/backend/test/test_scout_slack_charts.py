@@ -95,10 +95,13 @@ class TestScoutSlackReportCharts(BaseTest):
         assert titles == ["*Chart c4*", "*Chart c1*", "*Chart c0*"]
         assert render_mock.call_count == MAX_SLACK_REPORT_CHARTS
 
-    @parameterized.expand([("no_acting_user", None), ("no_charts", "user")])
+    @parameterized.expand([("no_acting_user", None), ("deactivated_acting_user", "inactive"), ("no_charts", "user")])
     def test_returns_nothing_without_a_principal_or_charts(self, _name, actor) -> None:
+        if actor == "inactive":
+            self.user.is_active = False
+            self.user.save(update_fields=["is_active"])
         run = self._make_run(created_by=self.user if actor else None)
-        report = self._make_report([_chart("trend", _TRENDS)] if actor is None else [])
+        report = self._make_report([_chart("trend", _TRENDS)] if actor != "user" else [])
         render, url = self._patched_render()
         with render as render_mock, url:
             assert build_scout_report_chart_blocks(report, run) == []
