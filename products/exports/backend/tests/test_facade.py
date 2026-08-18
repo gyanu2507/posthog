@@ -52,6 +52,19 @@ class TestRenderPngExportInsightLookup(BaseTest):
         assert asset.insight_id == insight.id
         assert png == b"png"
 
+    def test_adhoc_render_requires_query_access(self):
+        with (
+            patch(
+                "products.exports.backend.facade.api.UserAccessControl.check_access_level_for_resource",
+                return_value=False,
+            ),
+            self.assertRaises(ValueError),
+        ):
+            render_png_export(
+                team=self.team, created_by=self.user, export_context={"source": {"kind": "InsightVizNode"}}
+            )
+        assert not ExportedAsset.objects.filter(team=self.team).exists()
+
     @parameterized.expand(
         [
             ("unknown_short_id", {"insight_short_id": "nope0000"}),

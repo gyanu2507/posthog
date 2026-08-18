@@ -121,6 +121,11 @@ def build_scout_report_chart_blocks(
             break
         try:
             asset_id = _render_chart_asset_id(team=report.team, created_by=created_by, query=query)
+            if asset_id is None:
+                continue
+            image_url = get_delivery_image_url(
+                team_id=report.team_id, asset_id=asset_id, expiry_delta=SLACK_REPORT_CHART_URL_TTL
+            )
         except Exception:
             logger.warning(
                 "signals_scout.slack_report_chart_render_error",
@@ -129,11 +134,6 @@ def build_scout_report_chart_blocks(
                 exc_info=True,
             )
             continue
-        if asset_id is None:
-            continue
-        image_url = get_delivery_image_url(
-            team_id=report.team_id, asset_id=asset_id, expiry_delta=SLACK_REPORT_CHART_URL_TTL
-        )
         if image_url is None:
             continue
         blocks.extend(_chart_blocks(chart, image_url))

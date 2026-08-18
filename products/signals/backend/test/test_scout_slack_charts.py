@@ -98,6 +98,17 @@ class TestScoutSlackReportCharts(BaseTest):
             assert build_scout_report_chart_blocks(report, run) == []
         render_mock.assert_not_called()
 
+    def test_url_mint_failure_skips_the_chart_but_keeps_the_rest(self) -> None:
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart("a", _TRENDS), _chart("b", _TRENDS)])
+        render, url = self._patched_render()
+        with render as render_mock, url as url_mock:
+            render_mock.return_value = (MagicMock(id=1), b"png")
+            url_mock.side_effect = [RuntimeError("db down"), "https://img/1"]
+            blocks = build_scout_report_chart_blocks(report, run)
+
+        assert [b["image_url"] for b in blocks if b["type"] == "image"] == ["https://img/1"]
+
     def test_render_budget_stops_further_charts(self) -> None:
         run = self._make_run(created_by=self.user)
         report = self._make_report([_chart("a", _TRENDS), _chart("b", _TRENDS)])

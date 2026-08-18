@@ -179,6 +179,10 @@ def render_png_export(
         raise ValueError("Provide exactly one of export_context, insight_id or insight_short_id")
     if export_context is not None:
         _validate_adhoc_export_context(export_context)
+        # An ad-hoc render runs whatever query the caller supplies, so it needs the same gate as
+        # running that query directly; the object-level check below covers only saved insights.
+        if not UserAccessControl(user=created_by, team=team).check_access_level_for_resource("query", "viewer"):
+            raise ValueError("Not allowed to run queries in this project")
     if insight_id is not None or insight_short_id is not None:
         insight_filter = {"id": insight_id} if insight_id is not None else {"short_id": insight_short_id}
         insight = Insight.objects.filter(team_id=team.id, deleted=False, **insight_filter).first()
