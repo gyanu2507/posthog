@@ -38,7 +38,7 @@ class HogQLFieldAccess:
     sql: str
 
 
-@dataclass
+@dataclass(frozen=False)
 class HogQLContext:
     """Context given to a HogQL expression printer"""
 
