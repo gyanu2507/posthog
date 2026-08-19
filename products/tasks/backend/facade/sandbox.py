@@ -25,6 +25,7 @@ from products.tasks.backend.logic.services.sandbox import (
     get_sandbox_class,
     get_sandbox_class_for_backend,
     is_public_sandbox_repo,
+    sandbox_repo_path,
 )
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "get_sandbox_class",
     "get_sandbox_class_for_backend",
     "is_public_sandbox_repo",
+    "sandbox_repo_path",
 ]
