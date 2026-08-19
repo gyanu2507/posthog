@@ -526,9 +526,10 @@ def create_from_template(
                 )
 
                 try:
-                    query = InsightVizNode(source=filter_to_query(template_tile["filters"])).model_dump(
-                        exclude_none=True
-                    )
+                    # allow_variables matches migration 0530 — template tiles may carry template variables
+                    query = InsightVizNode(
+                        source=filter_to_query(template_tile["filters"], allow_variables=True)
+                    ).model_dump(exclude_none=True)
                 except Exception:
                     logger.exception(
                         "dashboard_template_tile_filters_conversion_failed",
