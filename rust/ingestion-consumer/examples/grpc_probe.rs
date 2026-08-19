@@ -15,7 +15,9 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 #[tokio::main]
 async fn main() {
-    let addr = std::env::args().nth(1).expect("usage: grpc_probe http://host:port");
+    let addr = std::env::args()
+        .nth(1)
+        .expect("usage: grpc_probe http://host:port");
 
     let endpoint = tonic::transport::Endpoint::from_shared(addr.clone())
         .expect("valid address")

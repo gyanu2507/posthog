@@ -128,10 +128,6 @@ async fn produce_raw(
 
 struct FakeWorker {
     pub url: String,
-    /// The WorkerIngest gRPC port — always the HTTP port + 1, so a
-    /// `GrpcPort::OffsetFromHttp(1)` transport can address every worker on
-    /// one host.
-    pub grpc_port: u16,
     /// (distinct_id, seq) pairs in arrival order.
     pub received: Arc<Mutex<Vec<(String, usize)>>>,
     /// Gates /_ready (pool membership). When false the worker leaves the pool.
@@ -333,7 +329,6 @@ impl FakeWorker {
             }
         };
         let addr = listener.local_addr().unwrap();
-        let grpc_port = grpc_listener.local_addr().unwrap().port();
         let url = format!("http://127.0.0.1:{}", addr.port());
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
@@ -364,7 +359,6 @@ impl FakeWorker {
 
         Self {
             url,
-            grpc_port,
             received,
             healthy,
             ingest_ok,
@@ -441,6 +435,14 @@ impl WorkerIngestService for FakeWorkerGrpc {
         let delivery_log = self.delivery_log.clone();
 
         tokio::spawn(async move {
+            // Mirror the real worker: greet with seq 0 so response headers
+            // flush; the lane must ignore it.
+            let _ = tx.send(Ok(IngestStreamResponse {
+                seq: 0,
+                status: SubBatchStatus::Ok as i32,
+                accepted: 0,
+                error: String::new(),
+            }));
             let nack = |tx: &tokio::sync::mpsc::UnboundedSender<
                 Result<IngestStreamResponse, tonic::Status>,
             >,
