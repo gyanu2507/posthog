@@ -1777,9 +1777,6 @@
                 },
                 {
                     "$ref": "#/definitions/EmptyPropertyFilter"
-                },
-                {
-                    "$ref": "#/definitions/BehavioralPropertyFilter"
                 }
             ],
             "description": "Any filter type supported by `property_to_expr(scope=\"person\", ...)`."
@@ -5715,6 +5712,10 @@
                 "label": {
                     "description": "The label of this completion item. By default this is also the text that is inserted when selecting this completion.",
                     "type": "string"
+                },
+                "sortText": {
+                    "description": "Overrides the editor's default ordering for this item. Set when the backend can rank a suggestion, for example a function whose return type fits the comparison being written.",
+                    "type": "string"
                 }
             },
             "required": ["label", "insertText", "kind"],
@@ -5784,7 +5785,7 @@
         },
         "BehavioralPropertyFilter": {
             "additionalProperties": false,
-            "description": "Filters persons on whether they performed an event (optionally a number of times) within a time window, without needing a saved cohort. Shares the cohort criteria vocabulary (`BehavioralEventType`), but only the \"performed event\" family is supported inline — sequences and lifecycle criteria still require a cohort.",
+            "description": "Filters persons on whether they performed an event in a time window, without a saved cohort. Event scope only.",
             "properties": {
                 "event_filters": {
                     "description": "Extra property filters the matching events must satisfy. Deliberately excludes nested behavioral/cohort filters and groups",
@@ -25771,7 +25772,10 @@
                 "Zitadel",
                 "DeelFlows",
                 "Hootsuite",
-                "WisprFlow"
+                "WisprFlow",
+                "SamCart",
+                "IronSourceAds",
+                "MicrosoftExcel"
             ],
             "type": "string"
         },
@@ -29432,7 +29436,8 @@
                 "postgresql",
                 "aws-s3",
                 "s3-compatible",
-                "snowflake"
+                "snowflake",
+                "youtube-analytics"
             ],
             "type": "string"
         },
@@ -35490,6 +35495,13 @@
                     "$ref": "#/definitions/RecordingOrderDirection",
                     "default": "DESC",
                     "description": "Replay originally had all ordering as descending by specifying the field name, this runs counter to Django behavior where the field name specifies ascending sorting (e.g. the_field_name) and -the_field_name would indicate descending order to avoid invalidating or migrating all existing filters we keep DESC as the default or allow specification of an explicit order direction here"
+                },
+                "session_ids": {
+                    "description": "Pin the result to specific recordings by their session id, e.g. the ones just summarized. `$session_id` is not a session property, so it cannot be filtered on in `filter_group`.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
                 }
             },
             "required": ["duration", "filter_group"],

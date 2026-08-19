@@ -27,6 +27,8 @@ from posthog.hogql.modifiers import create_default_modifiers_for_team
 from posthog.hogql.parser import parse_expr
 from posthog.hogql.printer.utils import prepare_and_print_ast
 from posthog.hogql.property import (
+    BEHAVIORAL_PROPERTY_FILTER_FLAG,
+    action_to_expr,
     entity_to_expr,
     has_aggregation,
     map_virtual_properties,
@@ -42,6 +44,7 @@ from posthog.models import Property, PropertyDefinition, Team
 from posthog.models.property import PropertyGroup
 from posthog.utils import relative_date_parse
 
+from products.actions.backend.models.action import Action
 from products.cohorts.backend.models.cohort import Cohort
 from products.data_tools.backend.models.join import DataWarehouseJoin
 from products.event_definitions.backend.models.property_definition import PropertyType
@@ -56,6 +59,15 @@ not_call = lambda x: ast.Call(name="not", args=[x])
 
 class TestProperty(BaseTest):
     maxDiff = None
+
+    def setUp(self):
+        super().setUp()
+        flag_patch = patch(
+            "posthog.hogql.property.posthoganalytics.feature_enabled",
+            side_effect=lambda flag, *args, **kwargs: flag == BEHAVIORAL_PROPERTY_FILTER_FLAG,
+        )
+        flag_patch.start()
+        self.addCleanup(flag_patch.stop)
 
     def _property_to_expr(
         self,
@@ -1933,28 +1945,34 @@ class TestProperty(BaseTest):
         filter.update(overrides)
         return filter
 
-    def test_behavioral_performed_event(self):
+    @parameterized.expand([(False, "IN"), (True, "NOT IN")])
+    def test_behavioral_performed_event(self, negation: bool, sql_op: str):
         self.assertEqual(
-            self._property_to_expr(self._behavioral_filter()),
+            self._property_to_expr(self._behavioral_filter(negation=negation)),
             self._parse_expr(
-                "person_id IN (SELECT person_id FROM events"
+                f"person_id {sql_op} (SELECT person_id FROM events"
                 " WHERE event = '$pageview' AND timestamp > now() - toIntervalDay(30) GROUP BY person_id)"
             ),
         )
 
-    def test_behavioral_performed_event_negation(self):
-        self.assertEqual(
-            self._property_to_expr(self._behavioral_filter(negation=True)),
-            self._parse_expr(
-                "person_id NOT IN (SELECT person_id FROM events"
-                " WHERE event = '$pageview' AND timestamp > now() - toIntervalDay(30) GROUP BY person_id)"
-            ),
-        )
+    def test_behavioral_person_scope_raises(self):
+        with self.assertRaises(QueryError):
+            self._property_to_expr(self._behavioral_filter(), scope="person")
 
-    def test_behavioral_person_scope_compares_person_table_id(self):
-        expr = cast(ast.CompareOperation, self._property_to_expr(self._behavioral_filter(), scope="person"))
-        self.assertEqual(expr.left, ast.Field(chain=["id"]))
-        self.assertEqual(expr.op, ast.CompareOperationOp.In)
+    @parameterized.expand([(mode,) for mode in PersonsOnEventsMode])
+    def test_behavioral_resolves_under_all_poe_modes(self, mode: PersonsOnEventsMode):
+        query = ast.SelectQuery(
+            select=[ast.Constant(value=1)],
+            select_from=ast.JoinExpr(table=ast.Field(chain=["events"])),
+            where=self._property_to_expr(self._behavioral_filter()),
+        )
+        context = HogQLContext(
+            team_id=self.team.pk,
+            enable_select_queries=True,
+            modifiers=create_default_modifiers_for_team(self.team, HogQLQueryModifiers(personsOnEventsMode=mode)),
+        )
+        sql, _ = prepare_and_print_ast(query, context=context, dialect="clickhouse")
+        self.assertIn("GROUP BY", sql)
 
     @parameterized.expand(
         [
@@ -2006,13 +2024,6 @@ class TestProperty(BaseTest):
                 ),
             )
 
-    def test_behavioral_pydantic_filter_matches_dict_compilation(self):
-        pydantic_filter = BehavioralPropertyFilter(**self._behavioral_filter())
-        self.assertEqual(
-            self._property_to_expr(pydantic_filter),
-            self._property_to_expr(self._behavioral_filter()),
-        )
-
     def test_behavioral_count_aggregation_is_invisible_to_has_aggregation(self):
         # Trends moves aggregating WHERE clauses into HAVING; the count() inside the behavioral
         # subquery must not trigger that
@@ -2021,13 +2032,24 @@ class TestProperty(BaseTest):
         )
         self.assertEqual(has_aggregation(expr), False)
 
-    @parameterized.expand([("performed_event_sequence",), ("stopped_performing_event",)])
-    def test_behavioral_cohort_only_criteria_raise(self, value: str):
+    @parameterized.expand(
+        [
+            ("flag_off", {"return_value": False}),
+            ("flag_service_unavailable", {"side_effect": Exception("flag service unreachable")}),
+        ]
+    )
+    def test_behavioral_filter_requires_the_feature_flag(self, _name: str, flag_mock: dict):
+        # The gate sits in property_to_expr, so it covers the /query API and MCP, not just the UI entry point.
+        with patch("posthog.hogql.property.posthoganalytics.feature_enabled", **flag_mock):
+            with self.assertRaisesMessage(QueryError, "aren't available for this project"):
+                self._property_to_expr(self._behavioral_filter())
+
+    def test_behavioral_cohort_only_criteria_raise(self):
         with self.assertRaises(QueryError):
             self._property_to_expr(
                 Property(
                     type="behavioral",
-                    value=value,
+                    value="performed_event_sequence",
                     key="$pageview",
                     event_type="events",
                     time_value=1,
@@ -2039,9 +2061,36 @@ class TestProperty(BaseTest):
                 )
             )
 
-    def test_behavioral_unsupported_scope_raises(self):
+    @parameterized.expand(
+        [
+            ("no_window", {"time_value": None, "time_interval": None}),
+            ("multiple_without_count", {"value": "performed_event_multiple", "operator_value": None}),
+        ]
+    )
+    def test_behavioral_incomplete_filter_raises_instead_of_matching_everyone(self, _name: str, overrides: dict):
+        # Non-strict callers drop incomplete filters to Constant(1); for a behavioral filter that would
+        # widen the query to every person rather than narrowing it.
         with self.assertRaises(QueryError):
-            self._property_to_expr(self._behavioral_filter(), scope="session")
+            self._property_to_expr(
+                BehavioralPropertyFilter(**self._behavioral_filter(**overrides)), strict=False, scope="event"
+            )
+
+    def test_behavioral_explicit_datetime_to_bounds_a_relative_window(self):
+        with freeze_time("2024-05-15T12:00:00Z"):
+            expected_to = relative_date_parse("-1d", self.team.timezone_info)
+            self.assertEqual(
+                self._property_to_expr(self._behavioral_filter(explicit_datetime_to="-1d")),
+                self._parse_expr(
+                    "person_id IN (SELECT person_id FROM events"
+                    " WHERE event = '$pageview' AND timestamp > now() - toIntervalDay(30)"
+                    " AND timestamp < {date_to} GROUP BY person_id)",
+                    {"date_to": ast.Constant(value=expected_to)},
+                ),
+            )
+
+    def test_behavioral_zero_count_raises(self):
+        with self.assertRaises(QueryError):
+            self._property_to_expr(self._behavioral_filter(value="performed_event_multiple", operator_value=0))
 
     def test_behavioral_missing_time_window_raises(self):
         # Property-level validation accepts window-less realtime-cohort leaves (bytecode); the
@@ -2061,6 +2110,30 @@ class TestProperty(BaseTest):
     def test_behavioral_action_not_found_raises(self):
         with self.assertRaises(QueryError):
             self._property_to_expr(self._behavioral_filter(event_type="actions", key="999999"))
+
+    def test_behavioral_performed_event_with_action(self):
+        action = Action.objects.create(team=self.team, steps_json=[{"event": "$pageview"}])
+        self.assertEqual(
+            self._property_to_expr(self._behavioral_filter(event_type="actions", key=str(action.pk))),
+            self._parse_expr(
+                "person_id IN (SELECT person_id FROM events WHERE {action}"
+                " AND timestamp > now() - toIntervalDay(30) GROUP BY person_id)",
+                {"action": action_to_expr(action)},
+            ),
+        )
+
+    def test_behavioral_property_in_action_step_raises(self):
+        # Compiling one would re-enter action_to_expr until Python's recursion limit
+        action = Action.objects.create(team=self.team, steps_json=[{"event": "$pageview"}])
+        action.steps_json = [
+            {
+                "event": "$pageview",
+                "properties": [self._behavioral_filter(event_type="actions", key=str(action.pk))],
+            }
+        ]
+        action.save()
+        with self.assertRaises(QueryError):
+            action_to_expr(action)
 
 
 class TestPropertyIsSetIsNotSetWithData(APIBaseTest):
