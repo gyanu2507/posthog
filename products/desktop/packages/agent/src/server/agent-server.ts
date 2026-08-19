@@ -309,6 +309,8 @@ interface BuiltPrompt {
   meta?: Record<string, unknown>;
 }
 
+export const PREWARMED_RESUME_IDLE_CAPABILITY = "prewarmedResumeIdle";
+
 function hiddenTextBlock(text: string): ContentBlock {
   return {
     type: "text",
@@ -669,6 +671,7 @@ export class AgentServer {
         hasSession: !!this.session,
         bootMs: this.sessionReadyBootMs,
         sessionInitMs: this.sessionInitMs,
+        capabilities: [PREWARMED_RESUME_IDLE_CAPABILITY],
       });
     });
 
@@ -1191,7 +1194,7 @@ export class AgentServer {
             taskId: commandSession.payload.task_id,
             runId: commandSession.payload.run_id,
           });
-          const prompt = builtPrompt.prompt;
+          let prompt = builtPrompt.prompt;
           if (prompt.length === 0) {
             throw new Error("User message cannot be empty");
           }
@@ -1251,6 +1254,12 @@ export class AgentServer {
             resolveDelivery(outcome);
             return outcome;
           }
+
+          const deferredResume = await this.preparePrewarmedResumePrompt(
+            commandSession.payload,
+            prompt,
+          );
+          prompt = deferredResume.prompt;
 
           commandSession.logWriter.resetTurnMessages(
             commandSession.payload.run_id,
@@ -1323,6 +1332,10 @@ export class AgentServer {
               throw error;
             }
             commitDelivery();
+            if (deferredResume.consumed) {
+              this.resumeState = null;
+              this.nativeResume = null;
+            }
             const outcome = { stopReason: "error_recoverable" };
             resolveDelivery(outcome);
             return outcome;
@@ -1330,6 +1343,10 @@ export class AgentServer {
             this.suppressAdapterTurnComplete = false;
           }
           commitDelivery();
+          if (deferredResume.consumed) {
+            this.resumeState = null;
+            this.nativeResume = null;
+          }
 
           this.logger.debug("User message completed", {
             stopReason: result.stopReason,
@@ -2252,6 +2269,21 @@ export class AgentServer {
       });
     }
 
+    const taskRunState = taskRun?.state as Record<string, unknown> | undefined;
+    const prewarmed = taskRunState?.prewarmed === true;
+    const hasPendingUserPrompt =
+      (typeof taskRunState?.pending_user_message === "string" &&
+        taskRunState.pending_user_message.trim().length > 0) ||
+      (Array.isArray(taskRunState?.pending_user_artifact_ids) &&
+        taskRunState.pending_user_artifact_ids.length > 0);
+    if (prewarmed && !hasPendingUserPrompt) {
+      this.prewarmedRun = true;
+      this.logger.debug(
+        "Prewarmed run awaits its forwarded first message, skipping initial message",
+      );
+      return;
+    }
+
     if (this.nativeResume) {
       await this.sendResumeContinuation(payload, taskRun);
       return;
@@ -2283,9 +2315,6 @@ export class AgentServer {
       // A prewarmed run gets its first message forwarded as a user_message
       // signal on activation; building one from task.description here too
       // would deliver it twice (and without the forwarded artifacts).
-      const prewarmed = !!(
-        taskRun?.state as Record<string, unknown> | undefined
-      )?.prewarmed;
       let initialPrompt: ContentBlock[] = [];
       let initialPromptMeta: Record<string, unknown> | undefined;
       if (pendingUserPrompt?.prompt.length) {
@@ -2417,6 +2446,64 @@ export class AgentServer {
         ...(resumePromptMeta ? { meta: resumePromptMeta } : {}),
       };
     });
+  }
+
+  private async preparePrewarmedResumePrompt(
+    payload: JwtPayload,
+    prompt: ContentBlock[],
+  ): Promise<{ prompt: ContentBlock[]; consumed: boolean }> {
+    if (!this.prewarmedRun) {
+      return { prompt, consumed: false };
+    }
+
+    if (this.nativeResume) {
+      const checkpointApplied = this.nativeResume.warm
+        ? false
+        : await this.applyResumeGitCheckpoint(payload);
+      this.logger.debug("Applying deferred native resume to user message", {
+        taskId: payload.task_id,
+        sessionId: this.nativeResume.sessionId,
+        warm: this.nativeResume.warm,
+        checkpointApplied,
+      });
+      return { prompt, consumed: true };
+    }
+
+    if (!this.resumeState?.conversation.length) {
+      return { prompt, consumed: false };
+    }
+
+    const resumeState = this.resumeState;
+    const checkpointApplied = await this.applyResumeGitCheckpoint(payload);
+    const checkpointContext = checkpointApplied
+      ? "The workspace environment (all files, packages, and code changes) has been fully restored from the latest checkpoint."
+      : "No additional git checkpoint was applied before resuming. Use the current workspace contents together with the preserved conversation history below.";
+    const conversationSummary = formatConversationForResume(
+      resumeState.conversation,
+    );
+
+    this.logger.debug("Applying deferred summary resume to user message", {
+      taskId: payload.task_id,
+      conversationTurns: resumeState.conversation.length,
+      checkpointApplied,
+      hasGitCheckpoint: !!resumeState.latestGitCheckpoint,
+    });
+
+    return {
+      prompt: [
+        hiddenTextBlock(
+          `You are resuming a previous conversation. ${checkpointContext}\n\n` +
+            `Here is the conversation history from the previous session:\n\n` +
+            `${conversationSummary}\n\n` +
+            "The user has sent a new message:\n\n",
+        ),
+        ...prompt,
+        hiddenTextBlock(
+          "\n\nRespond to the user's new message above. You have full context from the previous session.",
+        ),
+      ],
+      consumed: true,
+    };
   }
 
   private async sendResumeContinuation(
