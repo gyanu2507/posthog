@@ -24,6 +24,7 @@ from products.warehouse_sources.backend.temporal.data_imports.external_data_job 
     trigger_schedule_buffer_one_activity,
     update_external_data_job_model,
 )
+from products.warehouse_sources.backend.types import ExternalDataSourceType
 
 
 class TestCustomerFacingError(SimpleTestCase):
@@ -176,3 +177,48 @@ def test_failed_finalization_with_no_job_resets_stale_running_schema() -> None:
     schema.refresh_from_db()
     assert schema.status == ExternalDataSchema.Status.FAILED
     assert schema.latest_error == "could not create the sync job"
+
+
+def test_exhausted_retryable_error_is_rewritten_without_disabling_the_sync() -> None:
+    # A connection drop that outlasts every retry reaches finalization with the raw libpq text,
+    # host and all. The source's exhaustion message must replace it, and because the class is still
+    # retryable the schema must not be disabled on the way out.
+    raw_driver_error = (
+        'OperationalError: connection failed: connection to server at "db.example.com" (10.0.0.1), '
+        "port 5432 failed: server closed the connection unexpectedly"
+    )
+    env = ActivityEnvironment()
+    inputs = UpdateExternalDataJobStatusInputs(
+        team_id=1,
+        job_id="019fde98-0727-0000-3f05-9991b4c84155",
+        schema_id="019fde98-0727-0000-3f05-9991b4c84156",
+        source_id="019fde98-0727-0000-3f05-9991b4c84157",
+        status=ExternalDataJob.Status.FAILED,
+        internal_error=raw_driver_error,
+        latest_error=raw_driver_error,
+    )
+
+    with (
+        mock.patch(
+            "products.warehouse_sources.backend.temporal.data_imports.external_data_job.get_rows",
+            return_value=0,
+        ),
+        mock.patch("products.warehouse_sources.backend.temporal.data_imports.external_data_job.finish_row_tracking"),
+        mock.patch.object(
+            ExternalDataSource.objects,
+            "get",
+            return_value=ExternalDataSource(source_type=ExternalDataSourceType.POSTGRES),
+        ),
+        mock.patch(
+            "products.warehouse_sources.backend.temporal.data_imports.external_data_job.update_should_sync"
+        ) as mock_update_should_sync,
+        mock.patch(
+            "products.warehouse_sources.backend.temporal.data_imports.external_data_job.update_external_job_status"
+        ) as mock_update_job_status,
+    ):
+        asyncio.run(env.run(update_external_data_job_model, inputs))
+
+    stored_error = mock_update_job_status.call_args.kwargs["latest_error"]
+    assert stored_error != raw_driver_error
+    assert "db.example.com" not in stored_error
+    mock_update_should_sync.assert_not_called()
