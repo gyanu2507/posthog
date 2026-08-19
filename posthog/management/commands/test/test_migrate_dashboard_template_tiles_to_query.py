@@ -23,6 +23,7 @@ class TestMigrateDashboardTemplateTilesToQuery(BaseTest):
         call_command("migrate_dashboard_template_tiles_to_query", "--live")
 
         template.refresh_from_db()
+        assert template.tiles is not None
         legacy_tile, both_tile, text_tile = template.tiles
         assert legacy_tile["query"]["kind"] == "InsightVizNode"
         assert legacy_tile["query"]["source"]["kind"] == "TrendsQuery"
@@ -40,5 +41,6 @@ class TestMigrateDashboardTemplateTilesToQuery(BaseTest):
         call_command("migrate_dashboard_template_tiles_to_query")
 
         template.refresh_from_db()
+        assert template.tiles is not None
         assert "filters" in template.tiles[0]
         assert "query" not in template.tiles[0]

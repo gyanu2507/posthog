@@ -1780,6 +1780,7 @@ class TestCreateFromTemplate(BaseTest):
         create_from_template(dashboard, template)
 
         insight = Insight.objects.get(team=self.team)
+        assert insight.query is not None
         assert insight.query["kind"] == "InsightVizNode"
         assert insight.query["source"]["kind"] == "TrendsQuery"
         assert insight.query["source"]["series"][0]["event"] == "$pageview"
