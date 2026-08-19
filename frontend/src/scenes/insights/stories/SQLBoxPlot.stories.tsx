@@ -64,7 +64,7 @@ const meta: Meta = {
         mswDecorator({
             get: {
                 '/api/projects/:team_id/groups_types': [],
-                '/api/projects/:team_id/query_tab_state/user': null,
+                '/api/projects/:team_id/query_tab_state/user': () => [200, null],
                 '/api/projects/:team_id/external_data_sources/connections': [],
                 '/api/projects/:team_id/external_data_sources/direct_connection_options': [],
                 '/api/environments/:team_id/external_data_sources/wizard': availableSources,
