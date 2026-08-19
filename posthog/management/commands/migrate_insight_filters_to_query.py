@@ -19,8 +19,9 @@ logger = structlog.get_logger(__name__)
 class Command(BaseCommand):
     help = (
         "Backfill `query` from legacy `filters` on insights that still lack one — the same conversion "
-        "as migration 0545, for rows created since it ran. Dry-run by default; pass --live to write. "
-        "Rows locked by concurrent writers are skipped, so re-run to pick up any remainder."
+        "as migration 0545, for rows created since it ran. Empty shells (no query, no filters) convert "
+        "to the default empty trends query they already render as. Dry-run by default; pass --live to "
+        "write. Rows locked by concurrent writers are skipped, so re-run to pick up any remainder."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -36,16 +37,17 @@ class Command(BaseCommand):
         team_id: int | None = options["team_id"]
 
         # Soft-deleted insights are included: they can be restored from the trash, so they need a query too.
-        base = Insight.objects_including_soft_deleted.filter(query__isnull=True).exclude(filters={})
-        # Empty shells (no query, no filters) are a separate cleanup decision — report them, never convert them.
+        # Empty shells (no query, no filters) are included too: filter_to_query({}) yields the same empty
+        # trends query they already render as at read time, so converting them changes nothing visible.
+        base = Insight.objects_including_soft_deleted.filter(query__isnull=True)
         shells = Insight.objects_including_soft_deleted.filter(query__isnull=True, filters={})
         if team_id is not None:
             base = base.filter(team_id=team_id)
             shells = shells.filter(team_id=team_id)
 
         total = base.count()
-        self.stdout.write(f"{total} insights with legacy filters and no query")
-        self.stdout.write(f"{shells.count()} empty shells (no query, no filters) — left untouched")
+        self.stdout.write(f"{total} insights without a query")
+        self.stdout.write(f"of which {shells.count()} empty shells (no filters either) — get the default trends query")
         if not live:
             self.stdout.write(self.style.WARNING("Dry run — pass --live to write"))
 

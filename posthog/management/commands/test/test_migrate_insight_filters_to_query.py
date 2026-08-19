@@ -51,7 +51,7 @@ class TestMigrateInsightFiltersToQuery(BaseTest):
         assert insight.query is None
         assert "migrated_at" not in insight.filters
 
-    def test_leaves_empty_shells_and_query_insights_untouched(self):
+    def test_converts_empty_shells_and_leaves_query_insights_untouched(self):
         shell = Insight.objects.create(team=self.team)
         existing_query = {"kind": "InsightVizNode", "source": {"kind": "TrendsQuery", "series": []}}
         query_insight = Insight.objects.create(team=self.team, query=existing_query)
@@ -60,8 +60,11 @@ class TestMigrateInsightFiltersToQuery(BaseTest):
 
         shell.refresh_from_db()
         query_insight.refresh_from_db()
-        assert shell.query is None
-        assert shell.filters == {}
+        # Shells must land on the same empty trends query they rendered as before, not on some real series.
+        assert shell.query is not None
+        assert shell.query["source"]["kind"] == "TrendsQuery"
+        assert shell.query["source"]["series"] == []
+        assert "migrated_at" in shell.filters
         assert query_insight.query == existing_query
 
     def test_conversion_error_skips_row_and_continues_across_batches(self):
