@@ -27866,6 +27866,10 @@
                     "description": "Extra globals for the query",
                     "type": "object"
                 },
+                "indexUsage": {
+                    "description": "Analyze how each property filter reads its data. Costs a second type-resolution pass, so only editors that render the result should ask for it.",
+                    "type": "boolean"
+                },
                 "kind": {
                     "const": "HogQLMetadata",
                     "type": "string"
@@ -37593,7 +37597,7 @@
         },
         "PredicateIndexUsage": {
             "additionalProperties": false,
-            "description": "How one property filter in the query will read and prune data, decided before the query runs.",
+            "description": "How one property filter in the query reads its data, decided before the query runs.",
             "properties": {
                 "column_name": {
                     "type": "string"
@@ -37608,6 +37612,7 @@
                     "type": "string"
                 },
                 "operator": {
+                    "description": "HogQL comparison operator, e.g. `==`, `in`, `ilike`.",
                     "type": "string"
                 },
                 "physical_type": {
@@ -37618,8 +37623,7 @@
                     "type": "string"
                 },
                 "scope": {
-                    "description": "`event`, `person`, `group` or `unknown`.",
-                    "type": "string"
+                    "$ref": "#/definitions/PredicateScope"
                 },
                 "semantic_type": {
                     "description": "Type the property definition declares.",
@@ -37658,6 +37662,10 @@
         },
         "PredicateIndexVerdict": {
             "enum": ["indexed", "blocked", "unindexed_column", "unindexed_json", "operator_not_indexable"],
+            "type": "string"
+        },
+        "PredicateScope": {
+            "enum": ["event", "person", "group", "unknown"],
             "type": "string"
         },
         "PreprocessingConfig": {
