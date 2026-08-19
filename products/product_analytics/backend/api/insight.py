@@ -1532,7 +1532,7 @@ class MCPInsightSerializer(InsightSerializer):
                 normalized_query = wrapped_node.model_dump(exclude_none=True, mode="json")
                 if isinstance(wrapped_node, schema.DataVisualizationNode):
                     box_plot = wrapped_node.chartSettings.boxPlot if wrapped_node.chartSettings else None
-                    if box_plot:
+                    if box_plot is not None:
                         normalized_box_plot = normalized_query.setdefault("chartSettings", {}).setdefault("boxPlot", {})
                         for field in ("xAxisColumn", "seriesColumn"):
                             if field in box_plot.model_fields_set and getattr(box_plot, field) is None:
