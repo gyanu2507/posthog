@@ -29736,12 +29736,14 @@ export namespace Schemas {
 
     /**
      * * `timeout` - timeout
+     * * `execution_failed` - execution_failed
      */
     export type ErrorCodeEnum = typeof ErrorCodeEnum[keyof typeof ErrorCodeEnum];
 
 
     export const ErrorCodeEnum = {
       Timeout: 'timeout',
+      ExecutionFailed: 'execution_failed',
     } as const;
 
     export interface ErrorResponse {
@@ -83097,7 +83099,8 @@ export namespace Schemas {
       readonly status: WizardRunStatusEnum;
       /** Machine-readable failure reason, or null if the run has not failed.
        *
-       * * `timeout` - timeout */
+       * * `timeout` - timeout
+       * * `execution_failed` - execution_failed */
       readonly error_code: ErrorCodeEnum | null;
     }
 
@@ -83157,7 +83160,8 @@ export namespace Schemas {
     export interface WizardRunFailureRequest {
       /** Machine-readable reason the Wizard run failed.
        *
-       * * `timeout` - timeout */
+       * * `timeout` - timeout
+       * * `execution_failed` - execution_failed */
       error_code?: ErrorCodeEnum | null;
     }
 
