@@ -83154,6 +83154,13 @@ export namespace Schemas {
       readonly attr: string | null;
     }
 
+    export interface WizardRunFailureRequest {
+      /** Machine-readable reason the Wizard run failed.
+       *
+       * * `timeout` - timeout */
+      error_code?: ErrorCodeEnum | null;
+    }
+
     export interface WorkflowHealthBucket {
       /** Bucket start, aligned to the item's granularity (top of hour, midnight, or Monday). */
       bucket_start: string;
