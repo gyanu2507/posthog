@@ -142,6 +142,7 @@ Sales and subscription reports also need your vendor number (App Store Connect â
         return {
             "401 Client Error: Unauthorized for url: https://api.appstoreconnect.apple.com": "App Store Connect rejected your API key. Check the issuer ID, key ID and private key, or generate a new key, then reconnect.",
             "403 Client Error: Forbidden for url: https://api.appstoreconnect.apple.com": "Your App Store Connect API key does not have access to this data. Give the key a role that can read it (Finance or Sales for reports), then reconnect.",
+            "App Store Connect rejected a report request as invalid (HTTP 400)": "App Store Connect rejected this report request. The report type or version it asks for may no longer be valid. This usually needs a source update â€” contact support if it keeps failing.",
         }
 
     def get_retryable_errors(self) -> set[str]:

@@ -1,4 +1,5 @@
 import gzip
+import json
 import hashlib
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -17,6 +18,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.app_store_
     JWT_AUDIENCE,
     JWT_LIFETIME_SECONDS,
     AppStoreConnectAuthError,
+    AppStoreConnectReportError,
     AppStoreConnectResumeConfig,
     AppStoreConnectTokenProvider,
     AppStoreConnectUrlError,
@@ -100,13 +102,21 @@ def _json_response(body: dict[str, Any], status_code: int = 200) -> MagicMock:
     return response
 
 
-def _report_response(tsv: str | None, missing_status_code: int = 404) -> MagicMock:
-    """A gzipped-TSV report response, or the 404 Apple returns for a date with no activity."""
+def _report_response(tsv: str | None, missing_status_code: int = 404, error_detail: str | None = None) -> MagicMock:
+    """A gzipped-TSV report response, or the "no data" status Apple returns for a date with no activity.
+
+    A missing 400 defaults to Apple's misleading "Invalid vendor number specified" body — its wording
+    for a subscription-family day with no report yet, not a real credentials failure.
+    """
     response = MagicMock()
     if tsv is None:
         response.status_code = missing_status_code
         response.ok = False
-        response.text = '{"errors":[{"code":"NOT_FOUND"}]}'
+        if error_detail is None:
+            error_detail = "Invalid vendor number specified" if missing_status_code == 400 else "Not found"
+        body = {"errors": [{"status": str(missing_status_code), "detail": error_detail}]}
+        response.text = json.dumps(body)
+        response.json.return_value = body
         return response
     response.status_code = 200
     response.ok = True
@@ -153,15 +163,22 @@ class _FakeApi:
 class _FakeReportApi:
     """Serves `/v1/salesReports` per requested report date; an unknown date 404s like Apple's does."""
 
-    def __init__(self, tsv_by_date: dict[str, str], missing_status_code: int = 404) -> None:
+    def __init__(
+        self, tsv_by_date: dict[str, str], missing_status_code: int = 404, missing_error_detail: str | None = None
+    ) -> None:
         self.tsv_by_date = tsv_by_date
         self.missing_status_code = missing_status_code
+        self.missing_error_detail = missing_error_detail
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def get(self, url: str, **kwargs: Any) -> MagicMock:
         params: dict[str, Any] = kwargs.get("params") or {}
         self.calls.append((url, params))
-        return _report_response(self.tsv_by_date.get(params["filter[reportDate]"]), self.missing_status_code)
+        return _report_response(
+            self.tsv_by_date.get(params["filter[reportDate]"]),
+            self.missing_status_code,
+            self.missing_error_detail,
+        )
 
 
 def _collect(
@@ -1173,6 +1190,68 @@ class TestSalesReports:
                         resumable_source_manager=_FakeManager(),
                     )
                 )
+
+    @freeze_time("2026-03-05 09:00:00")
+    def test_subscription_report_unrecognized_400_fails_loudly(self) -> None:
+        # A 400 whose body is not Apple's "no data" quirk is a genuinely malformed request (a wrong
+        # version or sub type). It must fail rather than read as an empty day across the whole
+        # lookback, so an operator can tell a bad request from a quiet account.
+        api = _FakeReportApi(
+            {},
+            missing_status_code=400,
+            missing_error_detail="filter[version] '9_9' is not a valid value",
+        )
+
+        with pytest.raises(AppStoreConnectReportError, match="rejected a report request as invalid"):
+            _collect(
+                "subscription_reports",
+                api,
+                _FakeManager(),
+                vendor_number="85234567",
+                should_use_incremental_field=True,
+                db_incremental_field_last_value=date(2026, 3, 4),
+            )
+
+    @freeze_time("2026-03-05 09:00:00")
+    def test_all_empty_run_logs_a_warning(self) -> None:
+        # Every day tolerated as empty and no rows anywhere: log once at the end so an operator can
+        # tell an account with no subscription data from a request Apple keeps rejecting.
+        api = _FakeReportApi({}, missing_status_code=400)
+        logger = MagicMock()
+
+        rows = _collect(
+            "subscription_reports",
+            api,
+            _FakeManager(),
+            vendor_number="85234567",
+            logger=logger,
+            should_use_incremental_field=True,
+            db_incremental_field_last_value=date(2026, 3, 2),
+        )
+
+        assert rows == []
+        warnings = [call.args[0] for call in logger.warning.call_args_list]
+        run_summary = [message for message in warnings if "produced no rows" in message]
+        assert len(run_summary) == 1
+        assert "days_tolerated_as_empty=3" in run_summary[0]
+        assert "Invalid vendor number specified" in run_summary[0]
+
+    @freeze_time("2026-03-05 09:00:00")
+    def test_run_with_rows_does_not_log_the_empty_warning(self) -> None:
+        api = _FakeReportApi({"2026-03-04": "SKU\tUnits\nacme\t1\n"}, missing_status_code=400)
+        logger = MagicMock()
+
+        _collect(
+            "subscription_reports",
+            api,
+            _FakeManager(),
+            vendor_number="85234567",
+            logger=logger,
+            should_use_incremental_field=True,
+            db_incremental_field_last_value=date(2026, 3, 2),
+        )
+
+        assert not any("produced no rows" in call.args[0] for call in logger.warning.call_args_list)
 
     @freeze_time("2026-03-05 09:00:00")
     def test_unparseable_values_are_nulled_with_counted_warnings(self) -> None:

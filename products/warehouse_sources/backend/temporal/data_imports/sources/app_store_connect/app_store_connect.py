@@ -76,6 +76,12 @@ class AppStoreConnectUrlError(Exception):
     """A request or pagination URL points somewhere other than the App Store Connect API origin."""
 
 
+class AppStoreConnectReportError(Exception):
+    """Apple rejected a report request as invalid, and the rejection is not its "no data for this
+    date" quirk. Retrying can't fix a malformed request, so this fails the schema loudly instead of
+    reading as a quiet account across the whole lookback window."""
+
+
 def _require_api_url(url: str) -> str:
     """Reject any URL that isn't ``https://api.appstoreconnect.apple.com`` on the default HTTPS port.
 
@@ -655,6 +661,69 @@ def _parse_report(payload: bytes, report_date: date, failures: _ParseFailureCoun
     return rows
 
 
+# A subscription-family report day with no data comes back as a 400 whose body carries one of these
+# markers. The vendor-number marker is Apple's long-standing misleading wording for an empty
+# subscription day; the vendor number is valid, since the sales report reads on the same credentials.
+# A 400 whose body matches none of these is a genuinely malformed request, not a quiet day.
+_BENIGN_REPORT_400_MARKERS = (
+    "there were no results",
+    "no results for the request",
+    "invalid vendor number",
+)
+
+
+def _report_error_detail(response: requests.Response) -> str:
+    """Summarize an App Store Connect JSON:API error body into one line for classification and logs."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text[:200].strip()
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, list):
+        return response.text[:200].strip()
+    parts = [
+        str(error.get("detail") or error.get("title") or "").strip() for error in errors if isinstance(error, dict)
+    ]
+    return "; ".join(part for part in parts if part) or response.text[:200].strip()
+
+
+class _ToleratedReportDays:
+    """Counts report days Apple answered with a tolerated "no data" status, keeping one sample error.
+
+    A 404 is Apple's "no activity for this date" for the SALES report; the subscription report
+    families return a 400 for the same condition instead, and Apple words that 400 the same way it
+    words a genuinely bad request. A whole run of tolerated days that never produced a row is logged
+    when the walk ends, so an operator can tell an account with no data for this report from a
+    request Apple keeps rejecting, rather than reading both as a quiet account.
+    """
+
+    def __init__(self, logger: FilteringBoundLogger, config: AppStoreConnectEndpointConfig) -> None:
+        self._logger = logger
+        self._config = config
+        self.days_fetched = 0
+        self.days_tolerated = 0
+        self.days_with_rows = 0
+        self._sample_detail = ""
+
+    def record_tolerated(self, status_code: int, detail: str) -> None:
+        self.days_tolerated += 1
+        if detail and not self._sample_detail:
+            self._sample_detail = f"HTTP {status_code}: {detail}"
+
+    def flush(self) -> None:
+        if self.days_fetched == 0 or self.days_with_rows > 0:
+            return
+        self._logger.warning(
+            f"App Store Connect: the {self._config.name} run produced no rows. "
+            f"days_requested={self.days_fetched}, days_tolerated_as_empty={self.days_tolerated}, "
+            f"report_type={self._config.report_type}, report_sub_type={self._config.report_sub_type}, "
+            f"report_version={self._config.report_version or 'unset'}, "
+            f"sample_apple_error={self._sample_detail or 'none'}. This is either an account with no "
+            f"data for this report or a request Apple keeps rejecting; check the report filters if "
+            f"you expected data."
+        )
+
+
 def _fetch_report(
     session: requests.Session,
     config: AppStoreConnectEndpointConfig,
@@ -663,6 +732,7 @@ def _fetch_report(
     vendor_number: str,
     report_date: date,
     failures: _ParseFailureCounter,
+    tolerated: _ToleratedReportDays,
 ) -> list[dict[str, Any]]:
     params: dict[str, str] = {
         "filter[frequency]": config.report_frequency,
@@ -685,9 +755,27 @@ def _fetch_report(
         tolerate=config.missing_report_status_codes,
     )
     if response.status_code in config.missing_report_status_codes:
-        # Apple 404s any date with no activity at all — normal for quiet days and for dates before the
-        # app shipped — so a missing day is not an error. Subscription-family report types 400 for the
-        # same condition instead (see `missing_report_status_codes`).
+        # A 404 is always Apple's "no activity for this date" — normal for quiet days and for dates
+        # before the app shipped. A tolerated 400 is the subscription-family equivalent, but Apple
+        # reuses 400 for a genuinely malformed request too, so read the body: a recognized no-data
+        # marker is tolerated and counted, while an unrecognized 400 is a real bad request that fails
+        # the sync loudly instead of masquerading as a quiet account across the whole lookback.
+        if response.status_code == 400:
+            detail = _report_error_detail(response)
+            if not any(marker in detail.casefold() for marker in _BENIGN_REPORT_400_MARKERS):
+                logger.error(
+                    f"App Store Connect report request rejected as invalid: endpoint={config.name}, "
+                    f"status=400, detail={detail!r}, report_type={config.report_type}, "
+                    f"report_sub_type={config.report_sub_type}, report_version={config.report_version or 'unset'}"
+                )
+                raise AppStoreConnectReportError(
+                    f"App Store Connect rejected a report request as invalid (HTTP 400): {detail}. "
+                    f"The report type, sub type, or version this source asks for may no longer match "
+                    f"Apple's report specification."
+                )
+            tolerated.record_tolerated(400, detail)
+        else:
+            tolerated.record_tolerated(response.status_code, "")
         return []
 
     return _parse_report(response.content, report_date, failures)
@@ -728,16 +816,23 @@ def _get_sales_report(
             start = resumed
 
     report_date = start
-    days_fetched = 0
-    while report_date <= end and days_fetched < SALES_REPORT_MAX_DAYS_PER_RUN:
-        rows = _fetch_report(session, config, token_provider, logger, vendor_number, report_date, failures)
-        if rows:
-            yield rows
+    tolerated = _ToleratedReportDays(logger, config)
+    try:
+        while report_date <= end and tolerated.days_fetched < SALES_REPORT_MAX_DAYS_PER_RUN:
+            rows = _fetch_report(
+                session, config, token_provider, logger, vendor_number, report_date, failures, tolerated
+            )
+            tolerated.days_fetched += 1
+            if rows:
+                tolerated.days_with_rows += 1
+                yield rows
 
-        days_fetched += 1
-        report_date += timedelta(days=1)
-        if report_date <= end:
-            manager.save_state(AppStoreConnectResumeConfig(report_date=report_date.isoformat()))
+            report_date += timedelta(days=1)
+            if report_date <= end:
+                manager.save_state(AppStoreConnectResumeConfig(report_date=report_date.isoformat()))
+    finally:
+        # Flush on teardown too, so an abandoned or failed walk still surfaces an all-empty run.
+        tolerated.flush()
 
     if report_date <= end:
         logger.info(
