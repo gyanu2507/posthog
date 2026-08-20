@@ -346,32 +346,36 @@ def post_scout_report_to_slack(
             return build_scout_report_note_slack_message(report, run, edit_note)
         return build_scout_report_slack_message(report, run, delivery_id=delivery_id)
 
-    # The full-report message renders live content, so remember the revision it was built from; a
-    # note-only message renders the note snapshot, so it has no live revision to guard.
-    content_revision = None if edit_note is not None else report.updated_at
-    blocks, fallback = _build_report_message()
     # Building the message renders the report's charts, which can hold the worker for the render
-    # budget. Re-read the report before posting: an edit in that window can unsurface it (must not
-    # post at all) or change its content (the blocks built above no longer match the report).
-    try:
-        report.refresh_from_db()
-    except SignalReport.DoesNotExist:
-        logger.info("signals_scout.slack_delivery_report_deleted_after_render", report_id=str(report.id))
-        return
-    if report.status not in DELIVERABLE_REPORT_STATUSES:
-        logger.info(
-            "signals_scout.slack_delivery_report_not_surfaced_after_render",
-            report_id=str(report.id),
-            report_status=report.status,
-        )
-        return
-    if content_revision is not None and report.updated_at != content_revision:
-        # A content edit landed mid-render. Not every edit path enqueues a replacement delivery — the
-        # inbox PATCH (`SignalReportViewSet.partial_update`) doesn't — so rebuild from the current
-        # report and post that, rather than dropping the message or posting the pre-edit snapshot.
-        # Rebuilt once: a further edit racing the rebuild is ordinary last-writer timing.
-        logger.info("signals_scout.slack_delivery_report_rebuilt_after_content_change", report_id=str(report.id))
+    # budget. Re-read the report after every build and before posting, since an edit in that window
+    # can unsurface it (must not post at all) or change its content (the built blocks no longer match
+    # the report). On a content change, rebuild from the current report and re-check again — not
+    # every edit path enqueues a replacement delivery (the inbox PATCH,
+    # `SignalReportViewSet.partial_update`, doesn't), so dropping the message would lose it. The
+    # loop is bounded to one rebuild: a further edit racing the rebuild is ordinary last-writer
+    # timing, and unchanged charts are reused from the render cache, so a rebuild only re-renders
+    # charts the edit actually changed. A note-only message renders the passed-in note, not live
+    # content, so it has no revision to guard and never rebuilds.
+    blocks: list[dict] = []
+    fallback = ""
+    for _ in range(2):
+        content_revision = None if edit_note is not None else report.updated_at
         blocks, fallback = _build_report_message()
+        try:
+            report.refresh_from_db()
+        except SignalReport.DoesNotExist:
+            logger.info("signals_scout.slack_delivery_report_deleted_after_render", report_id=str(report.id))
+            return
+        if report.status not in DELIVERABLE_REPORT_STATUSES:
+            logger.info(
+                "signals_scout.slack_delivery_report_not_surfaced_after_render",
+                report_id=str(report.id),
+                report_status=report.status,
+            )
+            return
+        if content_revision is None or report.updated_at == content_revision:
+            break
+        logger.info("signals_scout.slack_delivery_report_rebuilt_after_content_change", report_id=str(report.id))
     client = SlackIntegration(integration).client
     try:
         response = client.chat_postMessage(
