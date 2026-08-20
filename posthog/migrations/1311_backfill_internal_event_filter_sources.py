@@ -7,10 +7,12 @@ BATCH_SIZE = 1000
 
 def set_internal_event_sources(apps, schema_editor):
     HogFunction = apps.get_model("posthog", "HogFunction")
+    db_alias = schema_editor.connection.alias
     functions_to_update = []
 
     for row in (
-        HogFunction.objects.filter(type="internal_destination")
+        HogFunction.objects.using(db_alias)
+        .filter(type="internal_destination")
         .order_by("pk")
         .values("pk", "filters")
         .iterator(chunk_size=BATCH_SIZE)
@@ -34,11 +36,11 @@ def set_internal_event_sources(apps, schema_editor):
 
         functions_to_update.append(HogFunction(pk=row["pk"], filters={**filters, "source": "internal-events"}))
         if len(functions_to_update) == BATCH_SIZE:
-            HogFunction.objects.bulk_update(functions_to_update, ["filters"], batch_size=BATCH_SIZE)
+            HogFunction.objects.using(db_alias).bulk_update(functions_to_update, ["filters"], batch_size=BATCH_SIZE)
             functions_to_update = []
 
     if functions_to_update:
-        HogFunction.objects.bulk_update(functions_to_update, ["filters"], batch_size=BATCH_SIZE)
+        HogFunction.objects.using(db_alias).bulk_update(functions_to_update, ["filters"], batch_size=BATCH_SIZE)
 
 
 class Migration(migrations.Migration):
