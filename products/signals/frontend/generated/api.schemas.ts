@@ -253,6 +253,11 @@ export interface SignalReportApi {
      * * `posthog_onboarding` - PostHog onboarding
      * * `posthog_system` - PostHog system */
     readonly billing_exempt_reason: BillingExemptReasonEnumApi | null
+    /**
+     * The space (task channel) this report is assigned to, or null when unassigned. The general view lists every report regardless of this value.
+     * @nullable
+     */
+    readonly channel_id: string | null
 }
 
 export interface PaginatedSignalReportListApi {

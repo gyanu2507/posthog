@@ -257,6 +257,18 @@ class TestSignalReportListAPI(APIBaseTest):
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["priority"] == "P0"
 
+    @parameterized.expand([("unassigned", False), ("assigned", True)])
+    def test_retrieve_includes_channel_id(self, _name, assign):
+        from products.tasks.backend.models import Channel  # noqa: PLC0415 — test-only cross-product read
+
+        channel = Channel.objects.create(team=self.team, name="Reports") if assign else None
+        report = self._create_report(channel=channel)
+
+        url = f"/api/projects/{self.team.id}/signals/reports/{report.id}/"
+        response = self.client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["channel_id"] == (str(channel.id) if channel else None)
+
     # --- priority filter ---
 
     @parameterized.expand(
