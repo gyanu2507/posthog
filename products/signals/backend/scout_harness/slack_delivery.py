@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import monotonic
 from typing import Literal
 from urllib.parse import quote
 
@@ -261,7 +262,7 @@ def _report_link_block(report: SignalReport) -> dict:
 
 
 def build_scout_report_slack_message(
-    report: SignalReport, run: SignalScoutRun, *, delivery_id: str | None = None
+    report: SignalReport, run: SignalScoutRun, *, delivery_id: str | None = None, render_started: float | None = None
 ) -> tuple[list[dict], str]:
     scout_name = _prettify_scout_name(run.skill_name)
     header = _report_header(report)
@@ -280,7 +281,8 @@ def build_scout_report_slack_message(
     if rendered_summary:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": rendered_summary}})
 
-    blocks.extend(build_scout_report_chart_blocks(report, run, delivery_id=delivery_id))
+    # `render_started` shares one render budget across a delivery's initial build and any rebuild.
+    blocks.extend(build_scout_report_chart_blocks(report, run, delivery_id=delivery_id, started=render_started))
     blocks.append(_report_link_block(report))
     fallback = f"Scout · {escape_slack_mrkdwn(scout_name)}: {escape_slack_mrkdwn(header[:200])}"
     return blocks, fallback
@@ -340,11 +342,15 @@ def post_scout_report_to_slack(
     )
     channel_id = _slack_channel_id(channel)
 
+    # Shared across the initial build and any rebuild so both draw from one render budget, rather
+    # than the rebuild getting a fresh one (which would let one delivery render for up to two budgets).
+    render_started = monotonic()
+
     def _build_report_message() -> tuple[list[dict], str]:
         # A note-only edit renders the passed-in note; every other delivery renders live report content.
         if edit_note is not None:
             return build_scout_report_note_slack_message(report, run, edit_note)
-        return build_scout_report_slack_message(report, run, delivery_id=delivery_id)
+        return build_scout_report_slack_message(report, run, delivery_id=delivery_id, render_started=render_started)
 
     # Building the message renders the report's charts, which can hold the worker for the render
     # budget. Re-read the report after every build and before posting, since an edit in that window

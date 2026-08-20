@@ -290,7 +290,7 @@ class TestScoutSlackDelivery(BaseTest):
         integration = Integration.objects.create(team=self.team, kind=Integration.IntegrationKind.SLACK)
         fake_client = MagicMock()
 
-        def _suppress_mid_render(report_arg, run_arg, *, delivery_id=None):
+        def _suppress_mid_render(report_arg, run_arg, *, delivery_id=None, render_started=None):
             SignalReport.objects.filter(id=report_arg.id).update(status=SignalReport.Status.SUPPRESSED)
             return [{"type": "header", "text": {"type": "plain_text", "text": "x"}}], "x"
 
@@ -330,7 +330,7 @@ class TestScoutSlackDelivery(BaseTest):
         fake_client.chat_postMessage.return_value = {"ts": "1785418710.000900"}
         builds = {"n": 0}
 
-        def _build(report_arg, run_arg, *, delivery_id=None):
+        def _build(report_arg, run_arg, *, delivery_id=None, render_started=None):
             builds["n"] += 1
             if builds["n"] == 1:
                 # A real edit save() bumps updated_at (auto_now); QuerySet.update() would not.
@@ -378,7 +378,7 @@ class TestScoutSlackDelivery(BaseTest):
         fake_client = MagicMock()
         builds = {"n": 0}
 
-        def _build(report_arg, run_arg, *, delivery_id=None):
+        def _build(report_arg, run_arg, *, delivery_id=None, render_started=None):
             builds["n"] += 1
             if builds["n"] == 1:
                 # Bump updated_at so the first build is treated as stale and a rebuild is triggered.

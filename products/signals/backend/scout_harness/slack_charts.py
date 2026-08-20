@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import re
+import hmac
 import json
 import hashlib
 from collections.abc import Callable
 from datetime import timedelta
 from time import monotonic
+
+from django.conf import settings
 
 import structlog
 
@@ -121,11 +124,20 @@ def _rendered_asset_entry_key(chart_id: str, query: dict) -> str:
     return f"{chart_id}:{fingerprint}"
 
 
+def _sign_cached_asset(cache_key: str, entry_key: str, asset_id: int) -> str:
+    # HMAC over the delivery-scoped cache key, the chart entry key, and the asset id, so the cached
+    # mapping is tamper-evident: a process with write access to the shared Redis can't forge or swap
+    # an entry (even for another of the acting user's own assets) without the server secret.
+    message = f"{cache_key}\x00{entry_key}\x00{asset_id}".encode()
+    return hmac.new(settings.SECRET_KEY.encode(), message, hashlib.sha256).hexdigest()[:32]
+
+
 # Stored as JSON through the raw Redis client rather than Django's cache: the default cache backend
 # pickles values, and a `cache.get` unpickles whatever bytes sit at the key, so a process that can
 # write this shared Redis could plant a pickle payload that executes on read. A JSON round-trip has
-# no such deserialization path. The cache only saves re-renders on retry; if it is down the message
-# must still go out, so both sides degrade to "no reuse" rather than raising into the delivery task.
+# no such deserialization path, and each entry carries an HMAC so a substituted asset id is rejected
+# on read. The cache only saves re-renders on retry; if it is down the message must still go out, so
+# both sides degrade to "no reuse" rather than raising into the delivery task.
 def _load_rendered_assets(cache_key: str | None) -> dict[str, int]:
     if cache_key is None:
         return {}
@@ -142,15 +154,26 @@ def _load_rendered_assets(cache_key: str | None) -> dict[str, int]:
         return {}
     if not isinstance(cached, dict):
         return {}
-    # Asset ids only; drop anything that isn't a plain int so a tampered entry can't reach the render.
-    return {str(k): v for k, v in cached.items() if isinstance(v, int) and not isinstance(v, bool)}
+    verified: dict[str, int] = {}
+    for key, value in cached.items():
+        # Each entry is [asset_id, signature]; keep only those whose signature we can reproduce, so a
+        # tampered or forged entry (a swapped asset id, an unsigned int) is treated as a cache miss.
+        if not (isinstance(value, list) and len(value) == 2):
+            continue
+        asset_id, signature = value
+        if not (isinstance(asset_id, int) and not isinstance(asset_id, bool) and isinstance(signature, str)):
+            continue
+        if hmac.compare_digest(signature, _sign_cached_asset(cache_key, str(key), asset_id)):
+            verified[str(key)] = asset_id
+    return verified
 
 
 def _store_rendered_assets(cache_key: str | None, rendered_assets: dict[str, int]) -> None:
     if cache_key is None or not rendered_assets:
         return
+    signed = {key: [asset_id, _sign_cached_asset(cache_key, key, asset_id)] for key, asset_id in rendered_assets.items()}
     try:
-        get_client().set(cache_key, json.dumps(rendered_assets), ex=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
+        get_client().set(cache_key, json.dumps(signed), ex=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
     except Exception:
         logger.warning("signals_scout.slack_report_chart_cache_write_failed", exc_info=True)
 
@@ -161,6 +184,7 @@ def build_scout_report_chart_blocks(
     *,
     delivery_id: str | None = None,
     clock: Callable[[], float] = monotonic,
+    started: float | None = None,
 ) -> list[dict]:
     """Render the report's charts to PNGs and return Slack blocks that show them.
 
@@ -170,7 +194,9 @@ def build_scout_report_chart_blocks(
 
     The cap counts attempts, not successes: a report full of failing charts must not launch an
     export workflow per chart. With a `delivery_id`, successful renders are remembered so a retry
-    of the same delivery reuses them."""
+    of the same delivery reuses them. Pass `started` to measure the render budget from an earlier
+    moment than this call — a delivery that rebuilds shares one budget across both builds instead of
+    handing the rebuild a fresh one."""
     from products.exports.backend.facade.api import RENDER_TIMEOUT, get_delivery_image_url  # noqa: PLC0415
 
     charts = _ordered_charts(report)
@@ -183,7 +209,7 @@ def build_scout_report_chart_blocks(
 
     cache_key = _rendered_assets_cache_key(delivery_id) if delivery_id else None
     rendered_assets = _load_rendered_assets(cache_key)
-    started = clock()
+    started = clock() if started is None else started
     blocks: list[dict] = []
     attempts = 0
     for chart in charts:

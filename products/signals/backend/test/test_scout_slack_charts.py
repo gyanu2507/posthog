@@ -1,3 +1,4 @@
+import json
 from contextlib import nullcontext
 
 from posthog.test.base import BaseTest
@@ -14,6 +15,7 @@ from products.signals.backend.models import SignalReport, SignalScoutRun
 from products.signals.backend.scout_harness.slack_charts import (
     MAX_SLACK_REPORT_CHARTS,
     SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS,
+    _rendered_assets_cache_key,
     build_scout_report_chart_blocks,
 )
 from products.signals.backend.scout_harness.slack_delivery import build_scout_report_slack_message
@@ -177,6 +179,42 @@ class TestScoutSlackReportCharts(BaseTest):
             second = build_scout_report_chart_blocks(report, run, delivery_id="delivery-3")
 
         assert [b["image_url"] for b in second if b["type"] == "image"] == ["https://img/8"]
+
+    def test_tampered_cache_entry_is_rejected_and_rerenders(self) -> None:
+        get_client().flushdb()
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart("a", _TRENDS)])
+        render, url = self._patched_render()
+        with render as render_mock, url as url_mock:
+            render_mock.side_effect = [(MagicMock(id=7), b"png"), (MagicMock(id=9), b"png")]
+            url_mock.side_effect = lambda **kw: f"https://img/{kw['asset_id']}"
+            build_scout_report_chart_blocks(report, run, delivery_id="delivery-tamper")
+            # Simulate a shared-Redis writer swapping the cached asset id (keeping the old signature).
+            key = _rendered_assets_cache_key("delivery-tamper")
+            entry = json.loads(get_client().get(key))
+            (only_key,) = entry.keys()
+            entry[only_key][0] = 999
+            get_client().set(key, json.dumps(entry))
+            second = build_scout_report_chart_blocks(report, run, delivery_id="delivery-tamper")
+
+        # The forged id (999) fails the HMAC check and is treated as a miss, so the chart re-renders.
+        assert [b["image_url"] for b in second if b["type"] == "image"] == ["https://img/9"]
+        assert render_mock.call_count == 2
+
+    def test_shared_started_carries_the_render_budget_across_builds(self) -> None:
+        run = self._make_run(created_by=self.user)
+        report = self._make_report([_chart("a", _TRENDS)])
+        render, url = self._patched_render()
+        # `started` sits a whole budget in the past, so a rebuild sharing it has no budget left and
+        # renders nothing — proving the budget is measured from `started`, not fresh per build.
+        with render as render_mock, url:
+            render_mock.return_value = (MagicMock(id=1), b"png")
+            blocks = build_scout_report_chart_blocks(
+                report, run, clock=lambda: SLACK_REPORT_CHART_RENDER_BUDGET_SECONDS, started=1.0
+            )
+
+        assert render_mock.call_count == 0
+        assert [b for b in blocks if b["type"] == "image"] == []
 
     def test_cache_outage_still_delivers_charts(self) -> None:
         run = self._make_run(created_by=self.user)
