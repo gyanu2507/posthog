@@ -94,7 +94,7 @@ def _already_delivered_this_window(
         return False
 
     return (
-        ExternalDataDestinationJob.objects.for_team(team_id)
+        ExternalDataDestinationJob.objects.for_team(team_id, canonical=True)
         .filter(
             destination_id=destination.id,
             status=ExternalDataDestinationJob.Status.COMPLETED,
@@ -127,7 +127,7 @@ def create_destination_jobs_for_run(
             billable = bool(job.billable) and not _already_delivered_this_window(
                 job.team_id, schema.id, destination, watermark_start
             )
-            child, _ = ExternalDataDestinationJob.objects.for_team(job.team_id).get_or_create(
+            child, _ = ExternalDataDestinationJob.objects.for_team(job.team_id, canonical=True).get_or_create(
                 job_id=job.id,
                 destination_id=destination.id,
                 defaults={

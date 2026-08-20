@@ -89,9 +89,13 @@ def finalize_destination_job_and_maybe_close_parent(
         # Lock order is parent first, then child, for every caller. Two consumers finishing
         # different children of one run therefore serialize on the parent row instead of
         # interleaving their reads of the sibling set.
-        child_probe = ExternalDataDestinationJob.objects.for_team(team_id).get(id=destination_job_id)
+        child_probe = ExternalDataDestinationJob.objects.for_team(team_id, canonical=True).get(id=destination_job_id)
         parent = ExternalDataJob.objects.select_for_update().get(id=child_probe.job_id, team_id=team_id)
-        child = ExternalDataDestinationJob.objects.for_team(team_id).select_for_update().get(id=destination_job_id)
+        child = (
+            ExternalDataDestinationJob.objects.for_team(team_id, canonical=True)
+            .select_for_update()
+            .get(id=destination_job_id)
+        )
 
         _write_child_status(child, status, latest_error, rows_synced)
 
@@ -103,7 +107,7 @@ def finalize_destination_job_and_maybe_close_parent(
             # status is still recorded above so the run's history shows what each destination did.
             return None
 
-        children = list(ExternalDataDestinationJob.objects.for_team(team_id).filter(job_id=parent.id))
+        children = list(ExternalDataDestinationJob.objects.for_team(team_id, canonical=True).filter(job_id=parent.id))
         if any(c.status not in TERMINAL_DESTINATION_JOB_STATUSES for c in children):
             return None
 
@@ -187,7 +191,7 @@ def _run_uuid_for(parent: ExternalDataJob) -> str | None:
 
 
 def cascade_destination_jobs(
-    job_id: str,
+    job_id: str | None,
     team_id: int,
     status: str,
     latest_error: str | None = None,
@@ -201,10 +205,13 @@ def cascade_destination_jobs(
 
     Returns how many children were changed.
     """
+    if job_id is None:
+        return 0
+
     changed = 0
     with transaction.atomic():
         children = (
-            ExternalDataDestinationJob.objects.for_team(team_id)
+            ExternalDataDestinationJob.objects.for_team(team_id, canonical=True)
             .select_for_update()
             .filter(job_id=job_id)
             .exclude(status__in=TERMINAL_DESTINATION_JOB_STATUSES)
