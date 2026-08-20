@@ -314,6 +314,47 @@ class TestScoutSlackDelivery(BaseTest):
 
         fake_client.chat_postMessage.assert_not_called()
 
+    def test_task_skips_report_whose_content_changed_during_render(self) -> None:
+        # An edit that changes charts/title/summary during the render window leaves the report
+        # deliverable, but the blocks built here are now stale. The edit enqueues its own delivery,
+        # so this older message is skipped rather than posted out of order with the newer one.
+        emission = self._make_emission()
+        report = SignalReport.objects.create(
+            team=self.team,
+            status=SignalReport.Status.READY,
+            title="Checkout failures",
+            summary="Checkout failed",
+        )
+        integration = Integration.objects.create(team=self.team, kind=Integration.IntegrationKind.SLACK)
+        fake_client = MagicMock()
+
+        def _edit_mid_render(report_arg, run_arg, *, delivery_id=None):
+            # A real edit save() bumps updated_at (auto_now); QuerySet.update() would not.
+            edited = SignalReport.objects.get(id=report_arg.id)
+            edited.title = "Checkout failures (edited)"
+            edited.save()
+            return [{"type": "header", "text": {"type": "plain_text", "text": "x"}}], "x"
+
+        with (
+            patch("products.signals.backend.scout_harness.slack_delivery.SlackIntegration") as slack_integration,
+            patch(
+                "products.signals.backend.scout_harness.slack_delivery.build_scout_report_slack_message",
+                side_effect=_edit_mid_render,
+            ),
+        ):
+            slack_integration.return_value.client = fake_client
+            deliver_scout_slack_output.run(
+                self.team.id,
+                "report",
+                str(report.id),
+                str(emission.scout_run_id),
+                "01864f4c-6957-7d3f-8d85-1d775e527265",
+                integration.id,
+                "CSCOUTS|#scout-findings",
+            )
+
+        fake_client.chat_postMessage.assert_not_called()
+
     def test_task_retries_transient_delivery_failure(self) -> None:
         emission = self._make_emission()
         error = SlackApiError(

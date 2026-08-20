@@ -339,17 +339,24 @@ def post_scout_report_to_slack(
         project_id=report.team.project_id,
     )
     channel_id = _slack_channel_id(channel)
+    # For the full-report message, remember the report revision the blocks are built from. A
+    # note-only message renders the note snapshot, not live report content, so it isn't guarded.
+    content_revision = None if edit_note is not None else report.updated_at
     blocks, fallback = (
         build_scout_report_note_slack_message(report, run, edit_note)
         if edit_note is not None
         else build_scout_report_slack_message(report, run, delivery_id=delivery_id)
     )
     # Building the report message renders its charts, which can hold the worker for the render
-    # budget. The task checked the report was surfaced before rendering, but it can be suppressed,
-    # resolved, or deleted in that window — re-read the status here so a stale report (and the image
-    # URLs just minted for it) never reaches the channel.
+    # budget. The task checked the report was surfaced before rendering, but it can change in that
+    # window — re-read it before posting so a stale message (and the image URLs just minted for it)
+    # never reaches the channel. Two ways it can go stale:
+    #   1. It was suppressed, resolved, or deleted — no longer deliverable at all.
+    #   2. Its content (charts/title/summary) was edited, so the blocks no longer match the report.
+    # A content edit enqueues its own delivery, so skipping the stale one keeps Slack consistent
+    # with the inbox and avoids the newer, smaller message being overtaken by this older one.
     try:
-        report.refresh_from_db(fields=["status"])
+        report.refresh_from_db(fields=["status", "updated_at"])
     except SignalReport.DoesNotExist:
         logger.info("signals_scout.slack_delivery_report_deleted_after_render", report_id=str(report.id))
         return
@@ -359,6 +366,9 @@ def post_scout_report_to_slack(
             report_id=str(report.id),
             report_status=report.status,
         )
+        return
+    if content_revision is not None and report.updated_at != content_revision:
+        logger.info("signals_scout.slack_delivery_report_changed_after_render", report_id=str(report.id))
         return
     client = SlackIntegration(integration).client
     try:

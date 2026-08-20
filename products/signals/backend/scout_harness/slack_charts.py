@@ -207,8 +207,13 @@ def build_scout_report_chart_blocks(
                 asset_id = _render_chart_asset_id(team=report.team, created_by=created_by, query=query)
                 if asset_id is None:
                     continue
+            # A cache-hit asset_id comes from the shared retry cache, so pin the URL mint to the
+            # acting user: a tampered entry pointing at another same-team user's PNG mints nothing.
             image_url = get_delivery_image_url(
-                team_id=report.team_id, asset_id=asset_id, expiry_delta=SLACK_REPORT_CHART_URL_TTL
+                team_id=report.team_id,
+                asset_id=asset_id,
+                expiry_delta=SLACK_REPORT_CHART_URL_TTL,
+                created_by_id=created_by.id,
             )
         except Exception:
             logger.warning(

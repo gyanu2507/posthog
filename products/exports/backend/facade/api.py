@@ -140,7 +140,9 @@ def _validate_adhoc_export_context(export_context: dict) -> None:
         raise ValueError("export_context.source must be an InsightVizNode-wrapped query")
 
 
-def get_delivery_image_url(*, team_id: int, asset_id: int, expiry_delta: timedelta) -> str | None:
+def get_delivery_image_url(
+    *, team_id: int, asset_id: int, expiry_delta: timedelta, created_by_id: int | None = None
+) -> str | None:
     """Mint a delivery-purposed url for one of the team's own rendered images.
 
     The token authenticates anonymously and bypasses the org's publicly-shared-resources
@@ -149,10 +151,15 @@ def get_delivery_image_url(*, team_id: int, asset_id: int, expiry_delta: timedel
     established server-side; the format and team filters bound the damage if one leaks —
     an image url can never be turned into a CSV or XLSX download. The manager also
     excludes assets past their TTL.
+
+    Pass ``created_by_id`` when the ``asset_id`` comes from a store a caller cannot fully
+    trust (e.g. an id read back from a shared cache): it pins the asset to the user that
+    rendered it, so a substituted id belonging to another same-team user mints nothing.
     """
-    asset = ExportedAsset.objects.filter(
-        team_id=team_id, id=asset_id, export_format=ExportedAsset.ExportFormat.PNG
-    ).first()
+    asset_filter = {"team_id": team_id, "id": asset_id, "export_format": ExportedAsset.ExportFormat.PNG}
+    if created_by_id is not None:
+        asset_filter["created_by_id"] = created_by_id
+    asset = ExportedAsset.objects.filter(**asset_filter).first()
     if asset is None:
         return None
     return asset.get_subscription_delivery_content_url(expiry_delta=expiry_delta)

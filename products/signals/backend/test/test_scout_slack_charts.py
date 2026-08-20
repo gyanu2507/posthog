@@ -69,12 +69,14 @@ class TestScoutSlackReportCharts(BaseTest):
         render, url = self._patched_render()
         with render as render_mock, url as url_mock:
             render_mock.side_effect = lambda **_: next(assets)
-            url_mock.side_effect = lambda *, team_id, asset_id, expiry_delta: f"https://img/{asset_id}"
+            url_mock.side_effect = lambda **kw: f"https://img/{kw['asset_id']}"
             blocks = build_scout_report_chart_blocks(report, run)
 
         assert [call.kwargs.get("insight_short_id") for call in render_mock.call_args_list] == [None, "abc123xy", None]
         assert render_mock.call_args_list[0].kwargs["export_context"] == {"source": _TRENDS}
         assert render_mock.call_args_list[0].kwargs["created_by"] == self.user
+        # Every URL mint is pinned to the acting user, so a substituted cache id can't be published.
+        assert all(call.kwargs["created_by_id"] == self.user.id for call in url_mock.call_args_list)
         assert [b for b in blocks if b["type"] == "image"] == [
             {"type": "image", "image_url": "https://img/11", "alt_text": "Chart trend"},
             {"type": "image", "image_url": "https://img/12", "alt_text": "Chart saved"},
@@ -140,7 +142,7 @@ class TestScoutSlackReportCharts(BaseTest):
         render, url = self._patched_render()
         with render as render_mock, url as url_mock:
             render_mock.side_effect = [(MagicMock(id=7), b"png"), (MagicMock(id=8, exception="boom"), None)]
-            url_mock.side_effect = lambda *, team_id, asset_id, expiry_delta: f"https://img/{asset_id}"
+            url_mock.side_effect = lambda **kw: f"https://img/{kw['asset_id']}"
             first = build_scout_report_chart_blocks(report, run, delivery_id="delivery-1")
             render_mock.side_effect = [(MagicMock(id=9), b"png")]
             second = build_scout_report_chart_blocks(report, run, delivery_id="delivery-1")
@@ -168,7 +170,7 @@ class TestScoutSlackReportCharts(BaseTest):
         render, url = self._patched_render()
         with render as render_mock, url as url_mock:
             render_mock.side_effect = [(MagicMock(id=7), b"png"), (MagicMock(id=8), b"png")]
-            url_mock.side_effect = lambda *, team_id, asset_id, expiry_delta: f"https://img/{asset_id}"
+            url_mock.side_effect = lambda **kw: f"https://img/{kw['asset_id']}"
             build_scout_report_chart_blocks(report, run, delivery_id="delivery-3")
             report.charts = [_chart("a", {**_TRENDS, "source": {"kind": "TrendsQuery", "series": [{"event": "x"}]}})]
             report.save(update_fields=["charts"])
