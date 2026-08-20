@@ -7,12 +7,11 @@ from collections.abc import Callable
 from datetime import timedelta
 from time import monotonic
 
-from django.core.cache import cache
-
 import structlog
 
 from posthog.models import Team, User
 from posthog.query_creator_access import creator_access_revoked
+from posthog.redis import get_client
 
 from products.signals.backend.models import SignalReport, SignalScoutRun
 from products.signals.backend.slack_formatting import escape_slack_mrkdwn
@@ -122,24 +121,36 @@ def _rendered_asset_entry_key(chart_id: str, query: dict) -> str:
     return f"{chart_id}:{fingerprint}"
 
 
-# The cache only saves re-renders on retry; if it is down the message must still go out, so both
-# sides degrade to "no reuse" rather than raising into the delivery task.
+# Stored as JSON through the raw Redis client rather than Django's cache: the default cache backend
+# pickles values, and a `cache.get` unpickles whatever bytes sit at the key, so a process that can
+# write this shared Redis could plant a pickle payload that executes on read. A JSON round-trip has
+# no such deserialization path. The cache only saves re-renders on retry; if it is down the message
+# must still go out, so both sides degrade to "no reuse" rather than raising into the delivery task.
 def _load_rendered_assets(cache_key: str | None) -> dict[str, int]:
     if cache_key is None:
         return {}
     try:
-        cached = cache.get(cache_key)
+        raw = get_client().get(cache_key)
     except Exception:
         logger.warning("signals_scout.slack_report_chart_cache_read_failed", exc_info=True)
         return {}
-    return dict(cached) if isinstance(cached, dict) else {}
+    if raw is None:
+        return {}
+    try:
+        cached = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(cached, dict):
+        return {}
+    # Asset ids only; drop anything that isn't a plain int so a tampered entry can't reach the render.
+    return {str(k): v for k, v in cached.items() if isinstance(v, int) and not isinstance(v, bool)}
 
 
 def _store_rendered_assets(cache_key: str | None, rendered_assets: dict[str, int]) -> None:
     if cache_key is None or not rendered_assets:
         return
     try:
-        cache.set(cache_key, rendered_assets, timeout=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
+        get_client().set(cache_key, json.dumps(rendered_assets), ex=_RENDERED_ASSETS_CACHE_TTL_SECONDS)
     except Exception:
         logger.warning("signals_scout.slack_report_chart_cache_write_failed", exc_info=True)
 

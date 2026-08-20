@@ -41,6 +41,10 @@ _PERMANENT_SLACK_ERROR_CODES = frozenset(
 
 ScoutSlackOutputType = Literal["finding", "report"]
 
+# A report only reaches Slack while it is surfaced. Checked both before enqueue and again just
+# before posting, since chart rendering can hold the worker long enough for the report to change.
+DELIVERABLE_REPORT_STATUSES = frozenset((SignalReport.Status.READY, SignalReport.Status.PENDING_INPUT))
+
 # Bound on the note snapshot a note-only edit carries through the Celery payload. Slack shows at
 # most SLACK_SECTION_TEXT_MAX_LEN characters after conversion, so anything past this headroom is
 # never rendered; the report keeps the full note either way.
@@ -340,6 +344,22 @@ def post_scout_report_to_slack(
         if edit_note is not None
         else build_scout_report_slack_message(report, run, delivery_id=delivery_id)
     )
+    # Building the report message renders its charts, which can hold the worker for the render
+    # budget. The task checked the report was surfaced before rendering, but it can be suppressed,
+    # resolved, or deleted in that window — re-read the status here so a stale report (and the image
+    # URLs just minted for it) never reaches the channel.
+    try:
+        report.refresh_from_db(fields=["status"])
+    except SignalReport.DoesNotExist:
+        logger.info("signals_scout.slack_delivery_report_deleted_after_render", report_id=str(report.id))
+        return
+    if report.status not in DELIVERABLE_REPORT_STATUSES:
+        logger.info(
+            "signals_scout.slack_delivery_report_not_surfaced_after_render",
+            report_id=str(report.id),
+            report_status=report.status,
+        )
+        return
     client = SlackIntegration(integration).client
     try:
         response = client.chat_postMessage(

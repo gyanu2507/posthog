@@ -4,9 +4,10 @@ from posthog.test.base import BaseTest
 from unittest.mock import MagicMock, patch
 
 from django.apps import apps
-from django.core.cache import cache
 
 from parameterized import parameterized
+
+from posthog.redis import get_client
 
 from products.exports.backend.facade.api import RENDER_TIMEOUT
 from products.signals.backend.models import SignalReport, SignalScoutRun
@@ -133,7 +134,7 @@ class TestScoutSlackReportCharts(BaseTest):
         assert render_mock.call_count == MAX_SLACK_REPORT_CHARTS
 
     def test_retry_of_the_same_delivery_reuses_rendered_assets(self) -> None:
-        cache.clear()
+        get_client().flushdb()
         run = self._make_run(created_by=self.user)
         report = self._make_report([_chart("a", _TRENDS), _chart("b", _TRENDS)])
         render, url = self._patched_render()
@@ -161,7 +162,7 @@ class TestScoutSlackReportCharts(BaseTest):
         assert [b["image_url"] for b in blocks if b["type"] == "image"] == ["https://img/1"]
 
     def test_retry_re_renders_a_chart_whose_query_changed(self) -> None:
-        cache.clear()
+        get_client().flushdb()
         run = self._make_run(created_by=self.user)
         report = self._make_report([_chart("a", _TRENDS)])
         render, url = self._patched_render()
@@ -182,10 +183,11 @@ class TestScoutSlackReportCharts(BaseTest):
         with (
             render as render_mock,
             url as url_mock,
-            patch("products.signals.backend.scout_harness.slack_charts.cache") as cache_mock,
+            patch(
+                "products.signals.backend.scout_harness.slack_charts.get_client",
+                side_effect=ConnectionError("redis down"),
+            ),
         ):
-            cache_mock.get.side_effect = ConnectionError("redis down")
-            cache_mock.set.side_effect = ConnectionError("redis down")
             render_mock.return_value = (MagicMock(id=1), b"png")
             url_mock.return_value = "https://img/1"
             blocks = build_scout_report_chart_blocks(report, run, delivery_id="delivery-2")

@@ -276,6 +276,44 @@ class TestScoutSlackDelivery(BaseTest):
 
         fake_client.chat_postMessage.assert_not_called()
 
+    def test_task_skips_report_suppressed_during_render(self) -> None:
+        # The task's pre-render status check passes, but chart rendering can hold the worker for the
+        # render budget. A report suppressed in that window must not be posted with its freshly minted
+        # image URLs — post_scout_report_to_slack re-reads the status after building the blocks.
+        emission = self._make_emission()
+        report = SignalReport.objects.create(
+            team=self.team,
+            status=SignalReport.Status.READY,
+            title="Checkout failures",
+            summary="Checkout failed",
+        )
+        integration = Integration.objects.create(team=self.team, kind=Integration.IntegrationKind.SLACK)
+        fake_client = MagicMock()
+
+        def _suppress_mid_render(report_arg, run_arg, *, delivery_id=None):
+            SignalReport.objects.filter(id=report_arg.id).update(status=SignalReport.Status.SUPPRESSED)
+            return [{"type": "header", "text": {"type": "plain_text", "text": "x"}}], "x"
+
+        with (
+            patch("products.signals.backend.scout_harness.slack_delivery.SlackIntegration") as slack_integration,
+            patch(
+                "products.signals.backend.scout_harness.slack_delivery.build_scout_report_slack_message",
+                side_effect=_suppress_mid_render,
+            ),
+        ):
+            slack_integration.return_value.client = fake_client
+            deliver_scout_slack_output.run(
+                self.team.id,
+                "report",
+                str(report.id),
+                str(emission.scout_run_id),
+                "01864f4c-6957-7d3f-8d85-1d775e527265",
+                integration.id,
+                "CSCOUTS|#scout-findings",
+            )
+
+        fake_client.chat_postMessage.assert_not_called()
+
     def test_task_retries_transient_delivery_failure(self) -> None:
         emission = self._make_emission()
         error = SlackApiError(
