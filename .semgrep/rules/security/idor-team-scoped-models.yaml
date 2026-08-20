@@ -175,10 +175,14 @@ rules:
                               |ExperimentSavedMetric
                               |ExportedAsset
                               |ExportedRecording
+                              |ExternalDataDestination
+                              |ExternalDataDestinationJob
                               |ExternalDataJob
                               |ExternalDataSchema
+                              |ExternalDataSchemaDestination
                               |ExternalDataSchemaOOMEvent
                               |ExternalDataSource
+                              |ExternalDataSourceDestination
                               |FeatureFlag
                               |FeatureRequest
                               |FeatureRequestAccountLink
@@ -319,7 +323,11 @@ rules:
                               |SingleSessionSummary
                               |SlackThreadTaskMapping
                               |SourceBatch
+                              |SourceBatchDestination
+                              |SourceBatchDestinationApply
+                              |SourceDestinationGroupLease
                               |SourceGroupLease
+                              |SourceRunDestination
                               |StreamlitApp
                               |Subscription
                               |SubscriptionDelivery
@@ -685,7 +693,11 @@ rules:
                         |SingleSessionSummary
                         |SlackThreadTaskMapping
                         |SourceBatch
+                        |SourceBatchDestination
+                        |SourceBatchDestinationApply
+                        |SourceDestinationGroupLease
                         |SourceGroupLease
+                        |SourceRunDestination
                         |StreamlitApp
                         |Subscription
                         |SubscriptionDelivery

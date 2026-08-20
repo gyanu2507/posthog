@@ -33,6 +33,12 @@ class ExternalDataJob(CreatedMetaFields, UpdatedMetaFields, UUIDTModel):
 
     pipeline_version = models.CharField(max_length=400, choices=PipelineVersion, null=True, blank=True)
     billable = models.BooleanField(default=True, null=True, blank=True)
+    # Incremental cursor this run extracted from, snapshotted at creation. The cursor only
+    # advances once every destination of a run succeeds, so a run repeated because one
+    # destination failed re-reads the same window; matching on this value is how billing
+    # recognizes that re-delivery and declines to charge destinations that already delivered
+    # it. NULL for full refresh, where every run is a fresh snapshot and bills.
+    watermark_start = models.TextField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     storage_delta_mib = models.FloatField(null=True, blank=True, default=0)
     # Also stores `cdc_write_mode` (`incremental_merge` | `scd2_append`) so the Syncs UI can

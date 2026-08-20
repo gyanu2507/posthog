@@ -2,6 +2,12 @@ from .column_annotation import WarehouseColumnAnnotation
 from .column_statistics import WarehouseColumnStatistics
 from .credential import DataWarehouseCredential
 from .custom_oauth2_integration import CustomOAuth2Integration
+from .external_data_destination import (
+    ExternalDataDestination,
+    ExternalDataDestinationJob,
+    ExternalDataSchemaDestination,
+    ExternalDataSourceDestination,
+)
 from .external_data_job import ExternalDataJob
 from .external_data_schema import ExternalDataSchema
 from .external_data_source import ExternalDataSource
@@ -13,8 +19,12 @@ __all__ = [
     "CustomOAuth2Integration",
     "DataWarehouseCredential",
     "DataWarehouseTable",
+    "ExternalDataDestination",
+    "ExternalDataDestinationJob",
     "ExternalDataJob",
     "ExternalDataSchema",
+    "ExternalDataSchemaDestination",
+    "ExternalDataSourceDestination",
     "ExternalDataSchemaOOMEvent",
     "ExternalDataSource",
     "PendingSourceCredential",
