@@ -11,7 +11,14 @@ def backfill_cimd_client_id(apps, schema_editor):
     collide with a generated opaque client_id.
     """
     OAuthApplication = apps.get_model("posthog", "OAuthApplication")
-    OAuthApplication.objects.filter(is_cimd_client=True, cimd_metadata_url__isnull=False).exclude(
+
+    # Pinned to the alias `migrate` is running on rather than letting the router pick; see 1274.
+    # bin/migrate uses `default_direct`, but db_for_write routes every write to `default`, where
+    # this UPDATE would commit outside the migration's transaction and without default_direct's
+    # lock_timeout to fail fast under contention.
+    db_alias = schema_editor.connection.alias
+
+    OAuthApplication.objects.using(db_alias).filter(is_cimd_client=True, cimd_metadata_url__isnull=False).exclude(
         cimd_metadata_url=""
     ).update(client_id=F("cimd_metadata_url"))
 
