@@ -56,7 +56,7 @@ class DestinationFinalizationTestBase(BaseTest):
             status=RUNNING,
         )
 
-    def _finalize(self, child, status, error=None, rows=None):
+    def _finalize(self, child, status, error=None, rows=None, run_uuid=None):
         return finalize_destination_job_and_maybe_close_parent(
             destination_job_id=str(child.id),
             team_id=self.team.pk,
@@ -64,6 +64,7 @@ class DestinationFinalizationTestBase(BaseTest):
             logger=logger,
             latest_error=error,
             rows_synced=rows,
+            run_uuid=run_uuid,
         )
 
     def _parent_status(self) -> str:
@@ -177,6 +178,52 @@ class TestParentClose(DestinationFinalizationTestBase):
 
         self.job.refresh_from_db()
         assert self.job.rows_synced == 42
+
+
+class TestCursorPromotion(DestinationFinalizationTestBase):
+    # The staging id is attempt-scoped and only the consumer holding the batch knows it; the job
+    # row does not carry it. Deriving it from the job instead would silently never promote, so
+    # every incremental sync would re-extract the same window forever.
+    STAGED_RUN_UUID = "run-abc-a1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.schema.sync_type = ExternalDataSchema.SyncType.INCREMENTAL
+        self.schema.sync_type_config = {
+            "incremental_field": "created",
+            "incremental_field_last_value": 100,
+            "incremental_staged": {"run_uuid": self.STAGED_RUN_UUID, "last_value": 200},
+        }
+        self.schema.save()
+
+    def _cursor(self) -> int | None:
+        self.schema.refresh_from_db()
+        return self.schema.sync_type_config.get("incremental_field_last_value")
+
+    def test_the_cursor_advances_once_every_destination_succeeded(self) -> None:
+        warehouse = self._child("warehouse", ExternalDataDestination.Type.POSTHOG_WAREHOUSE)
+        redshift = self._child("redshift")
+
+        self._finalize(warehouse, COMPLETED, run_uuid=self.STAGED_RUN_UUID)
+        self._finalize(redshift, COMPLETED, run_uuid=self.STAGED_RUN_UUID)
+
+        assert self._cursor() == 200
+
+    def test_the_cursor_is_held_when_a_destination_failed(self) -> None:
+        warehouse = self._child("warehouse", ExternalDataDestination.Type.POSTHOG_WAREHOUSE)
+        redshift = self._child("redshift")
+
+        self._finalize(warehouse, COMPLETED, run_uuid=self.STAGED_RUN_UUID)
+        self._finalize(redshift, FAILED, error="boom", run_uuid=self.STAGED_RUN_UUID)
+
+        assert self._cursor() == 100
+
+    def test_a_stale_run_uuid_does_not_promote_another_runs_window(self) -> None:
+        warehouse = self._child("warehouse", ExternalDataDestination.Type.POSTHOG_WAREHOUSE)
+
+        self._finalize(warehouse, COMPLETED, run_uuid="some-other-run-a1")
+
+        assert self._cursor() == 100
 
 
 class TestCascadeDestinationJobs(DestinationFinalizationTestBase):

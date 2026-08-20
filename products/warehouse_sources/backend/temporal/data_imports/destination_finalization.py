@@ -76,11 +76,16 @@ def finalize_destination_job_and_maybe_close_parent(
     logger: FilteringBoundLogger,
     latest_error: str | None = None,
     rows_synced: int | None = None,
+    run_uuid: str | None = None,
 ) -> ExternalDataJob | None:
     """Record one destination's outcome, then close the parent run if it was the last one.
 
     Safe to call from any consumer, sweep, or management command, and safe to call twice for
     the same child. Returns the parent when this call closed it, else None.
+
+    `run_uuid` is the extractor's attempt-scoped staging id, which only the consumer holding
+    the batch knows — the job row does not carry it. Without it the incremental cursor cannot
+    be promoted, so consumers finishing a destination must pass it.
 
     Callers running outside a request (the consumers, sweeps, management commands) own
     connection hygiene and must have called `close_old_connections()` for this thread.
@@ -140,24 +145,25 @@ def finalize_destination_job_and_maybe_close_parent(
         if model.status == ExternalDataJob.Status.COMPLETED:
             # Promotion commits with the parent's COMPLETED write, so a failure here rolls the
             # completion back and the batch retries — the guarantee the warehouse-only path had.
-            _promote_cursor_for_run(parent, team_id, logger)
+            _promote_cursor_for_run(parent, team_id, run_uuid, logger)
             _stamp_parent_rows_if_unset(parent, children)
 
         return parent
 
 
-def _promote_cursor_for_run(parent: ExternalDataJob, team_id: int, logger: FilteringBoundLogger) -> None:
+def _promote_cursor_for_run(
+    parent: ExternalDataJob, team_id: int, run_uuid: str | None, logger: FilteringBoundLogger
+) -> None:
     """Advance the incremental cursor, but only now that every destination has the window.
 
     Holding it until the whole run succeeds is what stops a destination developing a permanent
     gap: a run repeated because one destination failed re-extracts the same window, and the
     destinations that already applied it merge idempotently.
-    """
-    if parent.schema_id is None:
-        return
 
-    run_uuid = _run_uuid_for(parent)
-    if run_uuid is None:
+    A caller with no `run_uuid` is a path that never staged one (extraction failed, zero
+    batches), so there is nothing to promote.
+    """
+    if parent.schema_id is None or run_uuid is None:
         return
 
     schema = ExternalDataSchema.objects.get(id=parent.schema_id, team_id=team_id)
@@ -181,13 +187,6 @@ def _stamp_parent_rows_if_unset(parent: ExternalDataJob, children: list[External
 
     parent.rows_synced = max(counts)
     parent.save(update_fields=["rows_synced", "updated_at"])
-
-
-def _run_uuid_for(parent: ExternalDataJob) -> str | None:
-    # The extractor stamps the run uuid on the job's schema snapshot; the workflow run id is the
-    # fallback for runs recorded before that.
-    snapshot = parent.schema_snapshot or {}
-    return snapshot.get("run_uuid") or parent.workflow_run_id
 
 
 def cascade_destination_jobs(
