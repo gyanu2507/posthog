@@ -24,7 +24,7 @@ def repin_ownerrez_to_v2_0(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [("warehouse_sources", "0147_add_kalshi_source")]
+    dependencies = [("warehouse_sources", "0148_repin_qualys_vmdr_api_version_4_0")]
 
     operations = [
         # Reverse is a no-op: once repinned, v2.0 rows are indistinguishable from natively-created
