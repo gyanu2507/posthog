@@ -18,6 +18,10 @@ from products.warehouse_sources.backend.models.credential import (
     DataWarehouseCredential,
     get_or_create_datawarehouse_credential,
 )
+from products.warehouse_sources.backend.models.external_data_destination import (
+    ExternalDataDestination,
+    ExternalDataDestinationJob,
+)
 from products.warehouse_sources.backend.models.external_data_job import ExternalDataJob, get_latest_run_if_exists
 from products.warehouse_sources.backend.models.external_data_schema import (
     ExternalDataSchema,
@@ -66,6 +70,8 @@ __all__ = [
     "DataWarehouseCredential",
     "DataWarehouseTable",
     "DataWarehouseTableColumns",
+    "ExternalDataDestination",
+    "ExternalDataDestinationJob",
     "ExternalDataJob",
     "ExternalDataSchema",
     "ExternalDataSource",

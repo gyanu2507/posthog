@@ -72,7 +72,12 @@ from products.tasks.backend.facade.billing import (
     get_billable_sandbox_compute_usage_by_team,
     get_task_sandbox_usage_by_team,
 )
-from products.warehouse_sources.backend.facade.models import DataWarehouseTable, ExternalDataJob, ExternalDataSchema
+from products.warehouse_sources.backend.facade.models import (
+    DataWarehouseTable,
+    ExternalDataDestinationJob,
+    ExternalDataJob,
+    ExternalDataSchema,
+)
 
 logger = structlog.get_logger(__name__)
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -2015,6 +2020,58 @@ def combine_posthog_code_credits(token_credits: int, compute_credits: int) -> in
 dwh_pricing_free_period_start = datetime(2025, 10, 29, 0, 0, 0, tzinfo=UTC)
 dwh_pricing_free_period_end = datetime(2025, 11, 6, 0, 0, 0, tzinfo=UTC)
 
+# A source's first week of syncing is free.
+NEW_SOURCE_FREE_WINDOW = timedelta(days=7)
+
+
+def _rows_synced_totals(
+    begin: datetime,
+    end: datetime,
+    source_age: Literal["any", "new_only", "established_only"],
+) -> list:
+    """Rows synced per team, from whichever side of the run owns the count.
+
+    A run that fans out to several destinations bills per destination, so its rows come from
+    the child jobs and the parent is skipped. A run with no children — every run before
+    destinations existed, and every run of a schema that never opted in — bills from the
+    parent. The two sets are mutually exclusive by construction, so no row is counted twice.
+    """
+
+    def source_age_filter(prefix: str) -> Q | None:
+        if source_age == "any":
+            return None
+        is_new = Q(**{f"{prefix}created_at__gte": end - NEW_SOURCE_FREE_WINDOW})
+        return is_new if source_age == "new_only" else ~is_new
+
+    common = Q(
+        finished_at__gte=begin,
+        finished_at__lte=end,
+        billable=True,
+        status=ExternalDataJob.Status.COMPLETED,
+    )
+
+    parent_filter = common & Q(destination_jobs__isnull=True)
+    if (age := source_age_filter("pipeline__")) is not None:
+        parent_filter &= age
+
+    child_filter = common
+    if (age := source_age_filter("job__pipeline__")) is not None:
+        child_filter &= age
+
+    totals: defaultdict[int, int] = defaultdict(int)
+    for queryset in (
+        ExternalDataJob.objects.filter(parent_filter).values("team_id").annotate(total=Sum("rows_synced")),
+        # Cross-team by design: the usage report runs outside any team scope.
+        ExternalDataDestinationJob.objects.unscoped()
+        .filter(child_filter)
+        .values("team_id")
+        .annotate(total=Sum("rows_synced")),
+    ):
+        for row in queryset:
+            totals[row["team_id"]] += row["total"] or 0
+
+    return [{"team_id": team_id, "total": total} for team_id, total in totals.items()]
+
 
 @timed_log()
 @retry(tries=QUERY_RETRIES, delay=QUERY_RETRY_DELAY, backoff=QUERY_RETRY_BACKOFF)
@@ -2025,28 +2082,9 @@ def get_teams_with_rows_synced_in_period(begin: datetime, end: datetime) -> list
 
     if begin >= dwh_pricing_free_period_end:
         # after the free period, don't include rows reported in the free historical period
-        return list(
-            ExternalDataJob.objects.filter(
-                ~Q(pipeline__created_at__gte=end - timedelta(days=7)),
-                finished_at__gte=begin,
-                finished_at__lte=end,
-                billable=True,
-                status=ExternalDataJob.Status.COMPLETED,
-            )
-            .values("team_id")
-            .annotate(total=Sum("rows_synced"))
-        )
+        return _rows_synced_totals(begin, end, source_age="established_only")
 
-    return list(
-        ExternalDataJob.objects.filter(
-            finished_at__gte=begin,
-            finished_at__lte=end,
-            billable=True,
-            status=ExternalDataJob.Status.COMPLETED,
-        )
-        .values("team_id")
-        .annotate(total=Sum("rows_synced"))
-    )
+    return _rows_synced_totals(begin, end, source_age="any")
 
 
 @timed_log()
@@ -2054,28 +2092,9 @@ def get_teams_with_rows_synced_in_period(begin: datetime, end: datetime) -> list
 def get_teams_with_free_historical_rows_synced_in_period(begin: datetime, end: datetime) -> list:
     if begin >= dwh_pricing_free_period_start and begin < dwh_pricing_free_period_end:
         # during the free period, all rows get reported as free historical rows synced
-        return list(
-            ExternalDataJob.objects.filter(
-                finished_at__gte=begin,
-                finished_at__lte=end,
-                billable=True,
-                status=ExternalDataJob.Status.COMPLETED,
-            )
-            .values("team_id")
-            .annotate(total=Sum("rows_synced"))
-        )
+        return _rows_synced_totals(begin, end, source_age="any")
 
-    return list(
-        ExternalDataJob.objects.filter(
-            finished_at__gte=begin,
-            finished_at__lte=end,
-            billable=True,
-            status=ExternalDataJob.Status.COMPLETED,
-            pipeline__created_at__gte=end - timedelta(days=7),
-        )
-        .values("team_id")
-        .annotate(total=Sum("rows_synced"))
-    )
+    return _rows_synced_totals(begin, end, source_age="new_only")
 
 
 @timed_log()
