@@ -1550,6 +1550,7 @@ export interface PaginatedTaskDetailDTOListApi {
  * * `loop` - Loop
  * * `mcp_analytics` - MCP Analytics
  * * `signals_chat` - Signals Chat
+ * * `workflow` - Workflow
  */
 export type OriginProductEnumApi = (typeof OriginProductEnumApi)[keyof typeof OriginProductEnumApi]
 
@@ -1572,6 +1573,7 @@ export const OriginProductEnumApi = {
     Loop: 'loop',
     McpAnalytics: 'mcp_analytics',
     SignalsChat: 'signals_chat',
+    Workflow: 'workflow',
 } as const
 
 /**
@@ -1610,7 +1612,8 @@ export interface TaskCreateApi {
      * * `image_builder` - Image Builder
      * * `loop` - Loop
      * * `mcp_analytics` - MCP Analytics
-     * * `signals_chat` - Signals Chat */
+     * * `signals_chat` - Signals Chat
+     * * `workflow` - Workflow */
     origin_product?: OriginProductEnumApi
     /**
      * Target GitHub repository in `organization/repo` format (e.g. `posthog/posthog-js`).
@@ -1640,14 +1643,12 @@ export interface TaskCreateApi {
      */
     signal_report?: string | null
     /**
-     * How the created task relates to the signal report (e.g. 'implementation', 'discussion', 'research'). Recorded as a signals task_run work-log entry; 'implementation' also opens the auto-start spend gate. Any routing-safe identifier (lowercase letters, numbers, '_', '-') is accepted.
+     * How the created task relates to the signal report (e.g. 'implementation', 'discussion'). Recorded as a signals task_run work-log entry; 'implementation' also opens the auto-start spend gate. Any routing-safe identifier (lowercase letters, numbers, '_', '-') is accepted except labels reserved for server-created tasks ('research', 'repo_selection', 'scout'). Non-implementation labels count toward the report's discussion task limit.
      * @maxLength 200
      */
     signal_report_task_relationship?: string
     /** JSON schema used to validate the output of the task. */
     json_schema?: unknown
-    /** If true, this task is for internal use and should not be exposed to end users. */
-    internal?: boolean
     /** If true, the task is hidden from default list responses. */
     archived?: boolean
     /**
@@ -1753,7 +1754,8 @@ export interface TaskWriteApi {
      * * `image_builder` - Image Builder
      * * `loop` - Loop
      * * `mcp_analytics` - MCP Analytics
-     * * `signals_chat` - Signals Chat */
+     * * `signals_chat` - Signals Chat
+     * * `workflow` - Workflow */
     origin_product?: OriginProductEnumApi
     /**
      * Target GitHub repository in `organization/repo` format (e.g. `posthog/posthog-js`).
@@ -1783,14 +1785,12 @@ export interface TaskWriteApi {
      */
     signal_report?: string | null
     /**
-     * How the created task relates to the signal report (e.g. 'implementation', 'discussion', 'research'). Recorded as a signals task_run work-log entry; 'implementation' also opens the auto-start spend gate. Any routing-safe identifier (lowercase letters, numbers, '_', '-') is accepted.
+     * How the created task relates to the signal report (e.g. 'implementation', 'discussion'). Recorded as a signals task_run work-log entry; 'implementation' also opens the auto-start spend gate. Any routing-safe identifier (lowercase letters, numbers, '_', '-') is accepted except labels reserved for server-created tasks ('research', 'repo_selection', 'scout'). Non-implementation labels count toward the report's discussion task limit.
      * @maxLength 200
      */
     signal_report_task_relationship?: string
     /** JSON schema used to validate the output of the task. */
     json_schema?: unknown
-    /** If true, this task is for internal use and should not be exposed to end users. */
-    internal?: boolean
     /** If true, the task is hidden from default list responses. */
     archived?: boolean
     /**
@@ -1881,7 +1881,8 @@ export interface PatchedTaskWriteApi {
      * * `image_builder` - Image Builder
      * * `loop` - Loop
      * * `mcp_analytics` - MCP Analytics
-     * * `signals_chat` - Signals Chat */
+     * * `signals_chat` - Signals Chat
+     * * `workflow` - Workflow */
     origin_product?: OriginProductEnumApi
     /**
      * Target GitHub repository in `organization/repo` format (e.g. `posthog/posthog-js`).
@@ -1911,14 +1912,12 @@ export interface PatchedTaskWriteApi {
      */
     signal_report?: string | null
     /**
-     * How the created task relates to the signal report (e.g. 'implementation', 'discussion', 'research'). Recorded as a signals task_run work-log entry; 'implementation' also opens the auto-start spend gate. Any routing-safe identifier (lowercase letters, numbers, '_', '-') is accepted.
+     * How the created task relates to the signal report (e.g. 'implementation', 'discussion'). Recorded as a signals task_run work-log entry; 'implementation' also opens the auto-start spend gate. Any routing-safe identifier (lowercase letters, numbers, '_', '-') is accepted except labels reserved for server-created tasks ('research', 'repo_selection', 'scout'). Non-implementation labels count toward the report's discussion task limit.
      * @maxLength 200
      */
     signal_report_task_relationship?: string
     /** JSON schema used to validate the output of the task. */
     json_schema?: unknown
-    /** If true, this task is for internal use and should not be exposed to end users. */
-    internal?: boolean
     /** If true, the task is hidden from default list responses. */
     archived?: boolean
     /**

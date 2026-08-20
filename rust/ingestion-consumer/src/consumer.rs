@@ -82,6 +82,9 @@ struct PendingSubBatch {
 /// Used in integration tests where the Kafka consumer is created externally.
 pub struct IngestionConsumerOptions {
     pub batch_size: usize,
+    /// Payload-byte bound on a batch; `0` disables it (count-only collection).
+    /// See `Config::consumer_batch_size_kb`.
+    pub batch_size_bytes: usize,
     pub batch_timeout: Duration,
     pub max_in_flight_batches: usize,
     pub group_id: String,
@@ -106,6 +109,7 @@ pub struct IngestionConsumer {
     transport: Arc<Transport>,
     worker_urls: Vec<String>,
     batch_size: usize,
+    batch_size_bytes: usize,
     batch_timeout: Duration,
     max_in_flight_batches: usize,
     deferred_flush_timeout: Duration,
@@ -142,6 +146,7 @@ impl IngestionConsumer {
             transport,
             worker_urls,
             batch_size: options.batch_size,
+            batch_size_bytes: options.batch_size_bytes,
             batch_timeout: options.batch_timeout,
             max_in_flight_batches: options.max_in_flight_batches.max(1),
             deferred_flush_timeout: options.deferred_flush_timeout,
@@ -187,6 +192,7 @@ impl IngestionConsumer {
             group = %config.ingestion_consumer_group_id,
             workers = worker_urls.len(),
             batch_size = config.consumer_batch_size,
+            batch_size_kb = config.consumer_batch_size_kb,
             "Kafka consumer subscribed"
         );
 
@@ -198,6 +204,7 @@ impl IngestionConsumer {
             transport,
             worker_urls,
             batch_size: config.consumer_batch_size,
+            batch_size_bytes: config.consumer_batch_size_kb.saturating_mul(1024),
             batch_timeout: Duration::from_millis(config.consumer_batch_timeout_ms),
             max_in_flight_batches: config.consumer_max_background_tasks.max(1),
             deferred_flush_timeout: Duration::from_millis(
@@ -342,6 +349,7 @@ impl IngestionConsumer {
         let dispatcher = Arc::clone(&self.dispatcher);
         let group_id = self.group_id.clone();
         let max_batch_size = self.batch_size;
+        let max_batch_bytes = self.batch_size_bytes;
 
         let handle = tokio::spawn(async move {
             Self::process_collected_batch(
@@ -352,6 +360,7 @@ impl IngestionConsumer {
                 dispatcher,
                 group_id,
                 max_batch_size,
+                max_batch_bytes,
             )
             .await
         });
@@ -626,6 +635,7 @@ impl IngestionConsumer {
         dispatcher: Arc<Dispatcher>,
         group_id: String,
         max_batch_size: usize,
+        max_batch_bytes: usize,
     ) -> anyhow::Result<ProcessedBatch> {
         let start = Instant::now();
 
@@ -638,6 +648,17 @@ impl IngestionConsumer {
         if max_batch_size > 0 {
             gauge!("consumer_batch_utilization", "groupId" => group_id.clone())
                 .set(batch_size as f64 / max_batch_size as f64);
+        }
+
+        // The same ratio against the byte bound. Reported separately because the
+        // two disagree on lanes whose events are large: a count utilization can
+        // sit far below 1.0 while batches are in fact full, simply because the
+        // byte bound (or the prefetch queue behind it) ends collection first.
+        // Reading only the count ratio there invites raising a cap that cannot
+        // be reached. Absent when the byte bound is disabled.
+        if max_batch_bytes > 0 {
+            gauge!("consumer_batch_utilization_bytes", "groupId" => group_id.clone())
+                .set(collected.stats.total_bytes as f64 / max_batch_bytes as f64);
         }
 
         // Batch size distribution — matches Node.js `consumer_batch_size` histogram.
@@ -756,7 +777,14 @@ impl IngestionConsumer {
         Ok(accepted)
     }
 
-    /// Collect messages from Kafka up to batch_size or batch_timeout.
+    /// Collect messages from Kafka until the first of `batch_size` messages,
+    /// `batch_size_bytes` of payload (when enabled), or `batch_timeout`.
+    ///
+    /// The byte bound is checked at the top of the loop, where accumulated
+    /// bytes are those of messages already appended: a batch therefore always
+    /// carries at least one message — a single payload larger than the whole
+    /// bound still moves rather than wedging the partition — and overshoot is
+    /// at most one message, itself bounded by `fetch.message.max.bytes`.
     async fn collect_batch(&self) -> anyhow::Result<CollectedBatch> {
         let mut messages = Vec::with_capacity(self.batch_size);
         let mut offsets: HashMap<(String, i32), OffsetSpan> = HashMap::new();
@@ -768,6 +796,11 @@ impl IngestionConsumer {
 
         loop {
             if messages.len() >= self.batch_size {
+                break;
+            }
+
+            if self.batch_size_bytes > 0 && stats.total_bytes >= self.batch_size_bytes {
+                counter!("ingestion_consumer_batches_byte_capped_total").increment(1);
                 break;
             }
 
