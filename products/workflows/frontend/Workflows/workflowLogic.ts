@@ -114,7 +114,7 @@ export const PERSON_DEPENDENT_ACTION_TYPES = new Set(['wait_until_condition', 'r
 
 // Trigger types whose runs have no person attached. Keep in sync with the backend's
 // ROW_SCOPED_TRIGGER_TYPES, which is the authoritative check.
-export const ROW_SCOPED_TRIGGER_TYPES = new Set(['data-warehouse-table', 'slack-message'])
+export const ROW_SCOPED_TRIGGER_TYPES = new Set(['data-warehouse-table', 'internal-event'])
 
 function getTemplatingError(value: string, templating?: 'liquid' | 'hog'): string | undefined {
     if (templating === 'liquid' && typeof value === 'string') {
@@ -746,9 +746,11 @@ export interface workflowLogicActions {
                                   }
                                 | {
                                       filters: {
+                                          events: any[]
                                           properties?: any[] | undefined
+                                          source: 'internal-events'
                                       }
-                                      type: 'slack-message'
+                                      type: 'internal-event'
                                   }
                                 | {
                                       filters: {
@@ -1004,9 +1006,11 @@ export interface workflowLogicActions {
                         }
                       | {
                             filters: {
+                                events: any[]
                                 properties?: any[] | undefined
+                                source: 'internal-events'
                             }
-                            type: 'slack-message'
+                            type: 'internal-event'
                         }
                       | {
                             filters: {
@@ -1552,9 +1556,11 @@ export interface workflowLogicActions {
                                   }
                                 | {
                                       filters: {
+                                          events: any[]
                                           properties?: any[] | undefined
+                                          source: 'internal-events'
                                       }
-                                      type: 'slack-message'
+                                      type: 'internal-event'
                                   }
                                 | {
                                       filters: {
@@ -1810,9 +1816,11 @@ export interface workflowLogicActions {
                         }
                       | {
                             filters: {
+                                events: any[]
                                 properties?: any[] | undefined
+                                source: 'internal-events'
                             }
-                            type: 'slack-message'
+                            type: 'internal-event'
                         }
                       | {
                             filters: {
@@ -1983,9 +1991,11 @@ export interface workflowLogicActions {
               }
             | {
                   filters: {
+                      events: any[]
                       properties?: any[] | undefined
+                      source: 'internal-events'
                   }
-                  type: 'slack-message'
+                  type: 'internal-event'
               }
             | {
                   condition: {
@@ -2335,9 +2345,11 @@ export interface workflowLogicActions {
               }
             | {
                   filters: {
+                      events: any[]
                       properties?: any[] | undefined
+                      source: 'internal-events'
                   }
-                  type: 'slack-message'
+                  type: 'internal-event'
               }
             | {
                   condition: {
@@ -2700,9 +2712,11 @@ export interface workflowLogicMeta {
                             }
                           | {
                                 filters: {
+                                    events: any[]
                                     properties?: any[] | undefined
+                                    source: 'internal-events'
                                 }
-                                type: 'slack-message'
+                                type: 'internal-event'
                             }
                           | {
                                 filters: {

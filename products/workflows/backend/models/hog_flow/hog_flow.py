@@ -43,7 +43,7 @@ SUPPORTED_ACTION_TYPES: Final[list[str]] = [
 # kind), so the rejection message can say which mistake was made. Mirrors HogFlowTriggerSchema in
 # nodejs/src/cdp/schema/hogflow.ts.
 TRIGGER_TYPES: Final[frozenset[str]] = frozenset(
-    {"event", "schedule", "manual", "batch", "tracking_pixel", "webhook", "data-warehouse-table", "slack-message"}
+    {"event", "schedule", "manual", "batch", "tracking_pixel", "webhook", "data-warehouse-table", "internal-event"}
 )
 
 # Billable action types that are subject to rate limiting and quota tracking
@@ -63,12 +63,11 @@ PERSON_DEPENDENT_ACTION_TYPES: Final[set[str]] = {
     "random_cohort_branch",
 }
 
-# Trigger types that start a run with no person attached: a synced warehouse row and a Slack message
-# are both authored by something PostHog has no person record for. Keep in sync with the frontend's
+# Trigger types that start a run with no person attached. Keep in sync with the frontend's
 # ROW_SCOPED_TRIGGER_TYPES.
 ROW_SCOPED_TRIGGER_TYPES: Final[set[str]] = {
     "data-warehouse-table",
-    "slack-message",
+    "internal-event",
 }
 
 

@@ -776,7 +776,9 @@ class InputsSerializer(serializers.DictField):
 
 class HogFunctionFiltersSerializer(serializers.Serializer):
     source = serializers.ChoiceField(
-        choices=["events", "person-updates", "data-warehouse-table"], required=False, default="events"
+        choices=["events", "internal-events", "person-updates", "data-warehouse-table"],
+        required=False,
+        default="events",
     )  # type: ignore
     actions = serializers.ListField(child=serializers.DictField(), required=False)
     events = serializers.ListField(child=serializers.DictField(), required=False)
@@ -799,6 +801,9 @@ class HogFunctionFiltersSerializer(serializers.Serializer):
         # Ensure data is initialized as an empty dict if it's None
         data = data or {}
 
+        if function_type == "internal_destination":
+            data["source"] = "internal-events"
+
         if function_type == "transformation_log":
             # Filter bytecode is compiled against event-shaped globals, which log records
             # don't have — silently accepting filters would mis-evaluate at ingestion time.
@@ -817,6 +822,27 @@ class HogFunctionFiltersSerializer(serializers.Serializer):
         if data.get("source") == "events":
             # Don't allow events or actions for person-updates
             data.pop("data_warehouse", None)
+
+        if data.get("source") == "internal-events":
+            disallowed = [key for key in ("actions", "data_warehouse") if data.get(key)]
+            if disallowed:
+                raise serializers.ValidationError(
+                    dict.fromkeys(disallowed, "This filter is not supported for internal events.")
+                )
+            data.pop("actions", None)
+            data.pop("data_warehouse", None)
+            events = data.get("events")
+            if (
+                not isinstance(events, list)
+                or not events
+                or any(
+                    not isinstance(event, dict) or not isinstance(event.get("id"), str) or not event["id"].strip()
+                    for event in events
+                )
+            ):
+                raise serializers.ValidationError(
+                    {"events": "Internal event filters require at least one event with a non-empty id."}
+                )
 
         if data.get("source") == "person-updates":
             # Don't allow events or actions for person-updates

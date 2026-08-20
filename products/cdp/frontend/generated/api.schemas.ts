@@ -327,6 +327,7 @@ export interface InputsSchemaItemApi {
 
 /**
  * * `events` - events
+ * * `internal-events` - internal-events
  * * `person-updates` - person-updates
  * * `data-warehouse-table` - data-warehouse-table
  */
@@ -335,6 +336,7 @@ export type HogFunctionFiltersSourceEnumApi =
 
 export const HogFunctionFiltersSourceEnumApi = {
     Events: 'events',
+    InternalEvents: 'internal-events',
     PersonUpdates: 'person-updates',
     DataWarehouseTable: 'data-warehouse-table',
 } as const
