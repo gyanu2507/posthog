@@ -1,3 +1,4 @@
+import re
 import datetime as dt
 from collections.abc import Iterable
 from typing import Any, cast
@@ -119,9 +120,11 @@ class TestAwsSesSource:
         suppressed = schemas["suppressed_destinations"]
         assert suppressed.supports_incremental is True
         assert [field["field"] for field in suppressed.incremental_fields] == ["last_update_time"]
-        for name in ("account", "configuration_sets", "email_identities"):
-            assert schemas[name].supports_incremental is False
-            assert schemas[name].supports_append is False
+        for name, schema in schemas.items():
+            if name == "suppressed_destinations":
+                continue
+            assert schema.supports_incremental is False
+            assert schema.supports_append is False
 
     def test_get_schemas_honors_the_schema_picker_filter(self) -> None:
         schemas = self.source.get_schemas(self.config, team_id=1, names=["email_identities"])
@@ -161,6 +164,20 @@ class TestAwsSesSource:
     def test_transient_aws_failures_keep_retrying(self, observed_error: str) -> None:
         assert not any(key in observed_error for key in self.source.get_non_retryable_errors())
 
+    def test_the_caption_and_the_access_denied_message_grant_the_same_iam_actions(self) -> None:
+        # Both surfaces tell the user which IAM actions to grant; if they diverge, the setup
+        # form and the sync error give contradictory instructions.
+        caption = self.source.get_source_config.caption or ""
+        denied_message = next(
+            message for key, message in self.source.get_non_retryable_errors().items() if "AccessDeniedException" in key
+        )
+        assert denied_message is not None
+
+        caption_actions = set(re.findall(r"ses:[A-Za-z0-9]+", caption))
+        message_actions = set(re.findall(r"ses:[A-Za-z0-9]+", denied_message))
+        assert caption_actions == message_actions
+        assert len(caption_actions) >= 16
+
     def test_validate_credentials_passes_the_configured_credentials_through(self) -> None:
         with mock.patch.object(source_module, "validate_aws_ses_credentials", return_value=(True, None)) as validate:
             assert self.source.validate_credentials(self.config, team_id=1) == (True, None)
@@ -189,7 +206,13 @@ class TestAwsSesSource:
         [
             ("account", None),
             ("configuration_sets", ["configuration_set_name"]),
+            ("contact_lists", ["contact_list_name"]),
+            ("custom_verification_email_templates", ["template_name"]),
+            ("dedicated_ip_pools", ["pool_name"]),
+            ("dedicated_ips", ["ip"]),
             ("email_identities", ["identity_name"]),
+            ("email_templates", ["template_name"]),
+            ("multi_region_endpoints", ["endpoint_id"]),
             ("suppressed_destinations", ["email_address"]),
         ],
     )
