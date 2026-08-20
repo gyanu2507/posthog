@@ -21,7 +21,7 @@ DEFAULT_BACKFILL_DAYS = 730
 INCREMENTAL_OVERLAP_SECONDS = 120
 
 
-@dataclass
+@dataclass(frozen=False)  # static endpoint catalog, never mutated after construction
 class EbayEndpointConfig:
     name: str
     # Path under the eBay API host, including the Sell API's own version segment.

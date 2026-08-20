@@ -28,7 +28,7 @@ Window = Optional[tuple[datetime, datetime]]
 TokenRefresher = Callable[[str], str]
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=False)  # resume state is rebuilt wholesale each save, not mutated in place
 class EbayResumeConfig:
     # Start of the filter window being paginated, formatted exactly as it is sent to eBay.
     # `None` for endpoints without a date filter.
