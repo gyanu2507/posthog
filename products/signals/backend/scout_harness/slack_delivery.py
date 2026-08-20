@@ -339,24 +339,22 @@ def post_scout_report_to_slack(
         project_id=report.team.project_id,
     )
     channel_id = _slack_channel_id(channel)
-    # For the full-report message, remember the report revision the blocks are built from. A
-    # note-only message renders the note snapshot, not live report content, so it isn't guarded.
+
+    def _build_report_message() -> tuple[list[dict], str]:
+        # A note-only edit renders the passed-in note; every other delivery renders live report content.
+        if edit_note is not None:
+            return build_scout_report_note_slack_message(report, run, edit_note)
+        return build_scout_report_slack_message(report, run, delivery_id=delivery_id)
+
+    # The full-report message renders live content, so remember the revision it was built from; a
+    # note-only message renders the note snapshot, so it has no live revision to guard.
     content_revision = None if edit_note is not None else report.updated_at
-    blocks, fallback = (
-        build_scout_report_note_slack_message(report, run, edit_note)
-        if edit_note is not None
-        else build_scout_report_slack_message(report, run, delivery_id=delivery_id)
-    )
-    # Building the report message renders its charts, which can hold the worker for the render
-    # budget. The task checked the report was surfaced before rendering, but it can change in that
-    # window — re-read it before posting so a stale message (and the image URLs just minted for it)
-    # never reaches the channel. Two ways it can go stale:
-    #   1. It was suppressed, resolved, or deleted — no longer deliverable at all.
-    #   2. Its content (charts/title/summary) was edited, so the blocks no longer match the report.
-    # A content edit enqueues its own delivery, so skipping the stale one keeps Slack consistent
-    # with the inbox and avoids the newer, smaller message being overtaken by this older one.
+    blocks, fallback = _build_report_message()
+    # Building the message renders the report's charts, which can hold the worker for the render
+    # budget. Re-read the report before posting: an edit in that window can unsurface it (must not
+    # post at all) or change its content (the blocks built above no longer match the report).
     try:
-        report.refresh_from_db(fields=["status", "updated_at"])
+        report.refresh_from_db()
     except SignalReport.DoesNotExist:
         logger.info("signals_scout.slack_delivery_report_deleted_after_render", report_id=str(report.id))
         return
@@ -368,8 +366,12 @@ def post_scout_report_to_slack(
         )
         return
     if content_revision is not None and report.updated_at != content_revision:
-        logger.info("signals_scout.slack_delivery_report_changed_after_render", report_id=str(report.id))
-        return
+        # A content edit landed mid-render. Not every edit path enqueues a replacement delivery — the
+        # inbox PATCH (`SignalReportViewSet.partial_update`) doesn't — so rebuild from the current
+        # report and post that, rather than dropping the message or posting the pre-edit snapshot.
+        # Rebuilt once: a further edit racing the rebuild is ordinary last-writer timing.
+        logger.info("signals_scout.slack_delivery_report_rebuilt_after_content_change", report_id=str(report.id))
+        blocks, fallback = _build_report_message()
     client = SlackIntegration(integration).client
     try:
         response = client.chat_postMessage(

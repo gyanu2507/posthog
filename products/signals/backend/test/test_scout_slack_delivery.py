@@ -314,10 +314,10 @@ class TestScoutSlackDelivery(BaseTest):
 
         fake_client.chat_postMessage.assert_not_called()
 
-    def test_task_skips_report_whose_content_changed_during_render(self) -> None:
-        # An edit that changes charts/title/summary during the render window leaves the report
-        # deliverable, but the blocks built here are now stale. The edit enqueues its own delivery,
-        # so this older message is skipped rather than posted out of order with the newer one.
+    def test_task_rebuilds_report_whose_content_changed_during_render(self) -> None:
+        # An edit that changes content during the render window leaves the report deliverable but the
+        # built blocks stale. Not every edit path enqueues a replacement (the inbox PATCH doesn't), so
+        # the delivery must rebuild from the current report and post that, never drop it or post stale.
         emission = self._make_emission()
         report = SignalReport.objects.create(
             team=self.team,
@@ -327,19 +327,24 @@ class TestScoutSlackDelivery(BaseTest):
         )
         integration = Integration.objects.create(team=self.team, kind=Integration.IntegrationKind.SLACK)
         fake_client = MagicMock()
+        fake_client.chat_postMessage.return_value = {"ts": "1785418710.000900"}
+        builds = {"n": 0}
 
-        def _edit_mid_render(report_arg, run_arg, *, delivery_id=None):
-            # A real edit save() bumps updated_at (auto_now); QuerySet.update() would not.
-            edited = SignalReport.objects.get(id=report_arg.id)
-            edited.title = "Checkout failures (edited)"
-            edited.save()
-            return [{"type": "header", "text": {"type": "plain_text", "text": "x"}}], "x"
+        def _build(report_arg, run_arg, *, delivery_id=None):
+            builds["n"] += 1
+            if builds["n"] == 1:
+                # A real edit save() bumps updated_at (auto_now); QuerySet.update() would not.
+                edited = SignalReport.objects.get(id=report_arg.id)
+                edited.title = "Checkout failures (edited)"
+                edited.save()
+                return [{"type": "header", "text": {"type": "plain_text", "text": "stale"}}], "stale"
+            return [{"type": "header", "text": {"type": "plain_text", "text": "fresh"}}], "fresh"
 
         with (
             patch("products.signals.backend.scout_harness.slack_delivery.SlackIntegration") as slack_integration,
             patch(
                 "products.signals.backend.scout_harness.slack_delivery.build_scout_report_slack_message",
-                side_effect=_edit_mid_render,
+                side_effect=_build,
             ),
         ):
             slack_integration.return_value.client = fake_client
@@ -353,7 +358,10 @@ class TestScoutSlackDelivery(BaseTest):
                 "CSCOUTS|#scout-findings",
             )
 
-        fake_client.chat_postMessage.assert_not_called()
+        # Rebuilt once, and the posted message carries the rebuilt (fresh) blocks, not the stale ones.
+        assert builds["n"] == 2
+        posted = fake_client.chat_postMessage.call_args_list[0].kwargs
+        assert posted["blocks"][0]["text"]["text"] == "fresh"
 
     def test_task_retries_transient_delivery_failure(self) -> None:
         emission = self._make_emission()
