@@ -112,6 +112,25 @@
     (subpath (string-append (param "PROJECT") "/bin"))            ; sandbox files + scripts (bin/wait-for-docker runs unsandboxed)
     (subpath (string-append (param "PROJECT") "/.git/hooks"))     ; git hooks run unsandboxed
     (subpath (string-append (param "MAINREPO") "/.git/hooks"))    ; worktree main-repo hooks
+    ;; Repo-local git config, which reaches the same escape by another route:
+    ;; core.hooksPath relocates the hook directory the two denies above protect,
+    ;; and core.fsmonitor is a command git runs on ordinary read commands. Either
+    ;; executes in the developer's own terminal, outside Seatbelt. Nothing in the
+    ;; dev stack writes the repo's own .git/config — cargo's git-dependency writes
+    ;; go to ~/.cargo/git/db — so denying it costs nothing. config.worktree is the
+    ;; same file for a repo with extensions.worktreeConfig set; a worktree's own
+    ;; gitdir lives outside PROJECT, so bin/dev-sandbox denies that pair at runtime.
+    (literal (string-append (param "PROJECT") "/.git/config"))
+    (literal (string-append (param "PROJECT") "/.git/config.worktree"))
+    (literal (string-append (param "MAINREPO") "/.git/config"))
+    (literal (string-append (param "MAINREPO") "/.git/config.worktree"))
+    ;; The .git node itself. In a worktree it is a file holding `gitdir: <path>`,
+    ;; and rewriting it repoints git at a directory the attacker controls, which
+    ;; brings its own config and so the same hooksPath escape. Denying the literal
+    ;; does not affect entries inside a real .git directory — those are their own
+    ;; paths, and the dev stack writes them freely.
+    (literal (string-append (param "PROJECT") "/.git"))
+    (literal (string-append (param "MAINREPO") "/.git"))
     (literal (string-append (param "HOME") "/.gitconfig"))        ; core.hooksPath / credential.helper = !cmd
     (literal (string-append (param "HOME") "/.gitconfig.local"))  ; included by ~/.gitconfig — same escape if writable
     (subpath (string-append (param "HOME") "/.config/git"))       ; XDG git config — same hooksPath/helper escape
