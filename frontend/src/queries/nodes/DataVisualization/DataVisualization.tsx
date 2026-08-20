@@ -309,6 +309,7 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
                 rows={Array.isArray(rows) ? rows : []}
                 columns={columns}
                 chartSettings={chartSettings}
+                analyticsKey={dataVisualizationProps.key}
                 presetChartHeight={presetChartHeight}
             />
         )

@@ -8,10 +8,13 @@ interface BoxPlotColumn {
     type: { isNumerical: boolean }
 }
 
+export type SqlBoxPlotSkippedRowReason = 'missingStatistic' | 'invalidOrder' | 'meanOutsideRange'
+
 export interface SqlBoxPlotModel {
     labels: string[]
     series: BoxPlotSeries[]
     error: string | null
+    skippedRows: Record<SqlBoxPlotSkippedRowReason, number>
 }
 
 export type BoxPlotStatisticColumn = keyof Pick<
@@ -41,7 +44,18 @@ const MAX_BOX_PLOT_CELLS = 10_000
 // sqlLineGraphAdapter.
 const MAX_BOX_PLOT_SERIES = 200
 
-const emptyModel = (error: string | null = null): SqlBoxPlotModel => ({ labels: [], series: [], error })
+const emptySkippedRows = (): Record<SqlBoxPlotSkippedRowReason, number> => ({
+    missingStatistic: 0,
+    invalidOrder: 0,
+    meanOutsideRange: 0,
+})
+
+const emptyModel = (error: string | null = null): SqlBoxPlotModel => ({
+    labels: [],
+    series: [],
+    error,
+    skippedRows: emptySkippedRows(),
+})
 
 const findColumn = (
     columns: BoxPlotColumn[],
@@ -115,11 +129,37 @@ export const buildSqlBoxPlotModel = (
     const seriesLabels: string[] = []
     const seriesLabelSet = new Set<string>()
     const dataBySeries = new Map<string, Map<string, BoxPlotSeries['data'][number]>>()
+    const skippedRows = emptySkippedRows()
     const xIdentityByLabel = new Map<string, string>()
     const seriesIdentityByLabel = new Map<string, string>()
     const rowByPair = new Map<string, number>()
 
     for (const [rowIndex, row] of rows.entries()) {
+        const nullableValues = Object.fromEntries(
+            statisticColumns.map((statistic) => [statistic.value, finiteNumber(row[statistic.column!.dataIndex])])
+        ) as Record<BoxPlotValue, number | null>
+        if (Object.values(nullableValues).some((value) => value === null)) {
+            skippedRows.missingStatistic++
+            continue
+        }
+
+        const values = nullableValues as Record<BoxPlotValue, number>
+        if (
+            !(
+                values.min <= values.p25 &&
+                values.p25 <= values.median &&
+                values.median <= values.p75 &&
+                values.p75 <= values.max
+            )
+        ) {
+            skippedRows.invalidOrder++
+            continue
+        }
+        if (values.mean < values.min || values.mean > values.max) {
+            skippedRows.meanOutsideRange++
+            continue
+        }
+
         const xValue = xAxisColumn ? row[xAxisColumn.dataIndex] : 'Distribution'
         const seriesValue = seriesColumn ? row[seriesColumn.dataIndex] : 'Distribution'
         const label = String(xValue ?? '[No value]')
@@ -149,29 +189,6 @@ export const buildSqlBoxPlotModel = (
         }
         rowByPair.set(pairKey, rowIndex)
 
-        const nullableValues = Object.fromEntries(
-            statisticColumns.map((statistic) => [statistic.value, finiteNumber(row[statistic.column!.dataIndex])])
-        ) as Record<BoxPlotValue, number | null>
-        if (Object.values(nullableValues).some((value) => value === null)) {
-            return emptyModel(`Row ${rowIndex + 1} has a missing or non-numeric box plot statistic.`)
-        }
-
-        const values = nullableValues as Record<BoxPlotValue, number>
-        if (
-            !(
-                values.min <= values.p25 &&
-                values.p25 <= values.median &&
-                values.median <= values.p75 &&
-                values.p75 <= values.max
-            )
-        ) {
-            return emptyModel(
-                `Row ${rowIndex + 1} has statistics in the wrong order. Expected min <= p25 <= median <= p75 <= max.`
-            )
-        }
-        if (values.mean < values.min || values.mean > values.max) {
-            return emptyModel(`Row ${rowIndex + 1} has a mean outside its minimum and maximum.`)
-        }
         if (!labelSet.has(label)) {
             labels.push(label)
             labelSet.add(label)
@@ -209,5 +226,6 @@ export const buildSqlBoxPlotModel = (
             data: labels.map((label) => dataBySeries.get(seriesLabel)?.get(label) ?? null),
         })),
         error: null,
+        skippedRows,
     }
 }

@@ -1,5 +1,6 @@
 import clsx from 'clsx'
-import { useMemo } from 'react'
+import posthog from 'posthog-js'
+import { useEffect, useMemo } from 'react'
 
 import { BoxPlot } from '@posthog/quill-charts'
 import type { BoxPlotConfig } from '@posthog/quill-charts'
@@ -14,11 +15,13 @@ import { Column } from '../../dataVisualizationLogic'
 import { buildSqlBoxPlotModel } from './sqlBoxPlotAdapter'
 
 const handleChartError = makeChartErrorHandler('sql-box-plot')
+const capturedUnrenderedItems = new Set<string>()
 
 export interface SqlBoxPlotProps {
     rows: unknown[][]
     columns: Column[]
     chartSettings: ChartSettings
+    analyticsKey: string
     presetChartHeight?: boolean
     className?: string
 }
@@ -27,6 +30,7 @@ export const SqlBoxPlot = ({
     rows,
     columns,
     chartSettings,
+    analyticsKey,
     presetChartHeight,
     className,
 }: SqlBoxPlotProps): JSX.Element => {
@@ -35,6 +39,20 @@ export const SqlBoxPlot = ({
         () => buildSqlBoxPlotModel(rows, columns, chartSettings.boxPlot ?? {}),
         [rows, columns, chartSettings.boxPlot]
     )
+    const skippedRowCount = Object.values(model.skippedRows).reduce((total, count) => total + count, 0)
+    useEffect(() => {
+        const chartSessionKey = `${analyticsKey}:${posthog.get_session_id?.() ?? 'unknown'}`
+        if (skippedRowCount > 0 && !capturedUnrenderedItems.has(chartSessionKey)) {
+            capturedUnrenderedItems.add(chartSessionKey)
+            // pinned: analytics event name - renaming breaks dashboards
+            posthog.capture('sql box plot items not rendered', {
+                unrendered_item_count: skippedRowCount,
+                total_item_count: rows.length,
+                reasons: model.skippedRows,
+            })
+        }
+    }, [analyticsKey, model.skippedRows, rows.length, skippedRowCount])
+
     const yAxisSettings = chartSettings.leftYAxisSettings
     const config = useChartConfig<BoxPlotConfig>(
         () => ({

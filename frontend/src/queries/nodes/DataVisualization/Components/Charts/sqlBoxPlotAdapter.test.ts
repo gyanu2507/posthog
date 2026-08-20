@@ -73,12 +73,6 @@ describe('sqlBoxPlotAdapter', () => {
             error: 'Rows 1 and 2 use the same X-axis and series values. Return one row for each box.',
         },
         {
-            name: 'invalid summary order',
-            rows: [['Mon', 'Free', 1, 4, 3, 3, 5, 6]],
-            boxPlotSettings: settings,
-            error: 'Row 1 has statistics in the wrong order. Expected min <= p25 <= median <= p75 <= max.',
-        },
-        {
             name: 'several rows without an x-axis or series',
             rows: [
                 ['Mon', 'Free', 1, 2, 3, 4, 5, 6],
@@ -107,6 +101,37 @@ describe('sqlBoxPlotAdapter', () => {
         },
     ])('reports $name', ({ rows, boxPlotSettings, error }) => {
         expect(buildSqlBoxPlotModel(rows, columns, boxPlotSettings).error).toBe(error)
+    })
+
+    test.each([
+        {
+            name: 'missing statistic',
+            invalidRow: ['Mon', 'Free', 1, null, 3, 4, 5, 6],
+            skippedRows: { missingStatistic: 1, invalidOrder: 0, meanOutsideRange: 0 },
+        },
+        {
+            name: 'invalid statistic order',
+            invalidRow: ['Mon', 'Free', 1, 4, 3, 3, 5, 6],
+            skippedRows: { missingStatistic: 0, invalidOrder: 1, meanOutsideRange: 0 },
+        },
+        {
+            name: 'mean outside range',
+            invalidRow: ['Mon', 'Free', 1, 2, 3, 9, 5, 6],
+            skippedRows: { missingStatistic: 0, invalidOrder: 0, meanOutsideRange: 1 },
+        },
+    ])('skips a box with $name without hiding valid boxes', ({ invalidRow, skippedRows }) => {
+        const model = buildSqlBoxPlotModel([invalidRow, ['Tue', 'Free', 1, 2, 3, 4, 5, 6]], columns, settings)
+
+        expect(model.error).toBeNull()
+        expect(model.labels).toEqual(['Tue'])
+        expect(model.series).toEqual([
+            {
+                key: 'Free',
+                label: 'Free',
+                data: [{ min: 1, p25: 2, median: 3, mean: 4, p75: 5, max: 6 }],
+            },
+        ])
+        expect(model.skippedRows).toEqual(skippedRows)
     })
 
     test('rejects result shapes that would create a large sparse matrix', () => {

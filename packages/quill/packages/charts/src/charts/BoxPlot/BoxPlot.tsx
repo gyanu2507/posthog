@@ -2,11 +2,19 @@ import React, { useCallback, useMemo } from 'react'
 
 import { ChartLegend } from '../../components/Legend/ChartLegend'
 import { useChartLegend } from '../../components/Legend/useChartLegend'
-import { drawBoxes, drawBoxHighlight, drawGrid, type DrawContext } from '../../core/canvas-renderer'
+import {
+    drawAxes,
+    drawBoxes,
+    drawBoxHighlight,
+    drawGrid,
+    resolveAxisLineColor,
+    type DrawContext,
+} from '../../core/canvas-renderer'
 import { Chart } from '../../core/Chart'
 import { ChartErrorBoundary } from '../../core/ChartErrorBoundary'
 import { dimColor } from '../../core/color-utils'
 import { createBarScales, type BarScaleSet, yTickCountForHeight } from '../../core/scales'
+import { resolveAxisLines } from '../../core/types'
 import type {
     ChartConfig,
     ChartDimensions,
@@ -119,10 +127,13 @@ function BoxPlotInner<Meta = unknown>({
     const {
         yScaleType = 'linear',
         showGrid = false,
+        showAxisLines = false,
         meanRadius = 3,
         whiskerCapRatio = 0.6,
         boxStrokeWidth = 1.5,
     } = config ?? {}
+    const { x: xAxisLine, y: yAxisLine } = resolveAxisLines(showAxisLines)
+    const axisLines = useMemo(() => ({ x: xAxisLine, y: yAxisLine }), [xAxisLine, yAxisLine])
 
     const adaptedSeries = useMemo<Series<BoxPlotAdaptedMeta<Meta>>[]>(
         () =>
@@ -242,11 +253,13 @@ function BoxPlotInner<Meta = unknown>({
                 labels: drawLabels,
             }
 
+            const axisLineStyle = axisLines.x || axisLines.y
             if (showGrid) {
                 drawGrid(baseDrawCtx, {
                     gridColor: theme.gridColor,
                     gridDash: theme.gridDashPattern,
                     orientation: 'vertical',
+                    frame: !axisLineStyle,
                 })
             }
 
@@ -274,8 +287,16 @@ function BoxPlotInner<Meta = unknown>({
                     lineWidth: boxStrokeWidth,
                 })
             }
+
+            if (axisLineStyle) {
+                drawAxes(baseDrawCtx, {
+                    axisColor: resolveAxisLineColor(theme),
+                    xLine: axisLines.x,
+                    yLine: axisLines.y,
+                })
+            }
         },
-        [showGrid, meanRadius, whiskerCapRatio, boxStrokeWidth]
+        [showGrid, axisLines, meanRadius, whiskerCapRatio, boxStrokeWidth]
     )
 
     const drawHover = useCallback(
