@@ -3260,6 +3260,9 @@ database "posthog" {
   }
 
   table "kafka_logs_avro" {
+    settings = {
+      input_format_avro_allow_missing_fields = "1"
+    }
     column "uuid" {
       type = "String"
     }
@@ -3301,6 +3304,9 @@ database "posthog" {
     }
     column "attributes" {
       type = "Map(LowCardinality(String), String)"
+    }
+    column "retention_days" {
+      type = "Nullable(Int32)"
     }
     engine "kafka" {
       broker_list          = "warpstream_logs"
@@ -18674,7 +18680,11 @@ SELECT
   toInt32OrZero(_headers.value[indexOf(_headers.name, 'team_id')]) AS team_id,
   observed_timestamp
   + toIntervalDay(
-    toInt32OrDefault(_headers.value[indexOf(_headers.name, 'retention-days')], toInt32(15))
+    if(
+      (retention_days IS NOT NULL) AND (retention_days > 0),
+      retention_days,
+      toInt32OrDefault(_headers.value[indexOf(_headers.name, 'retention-days')], toInt32(15))
+    )
   ) AS original_expiry_timestamp,
   _partition,
   _topic,
