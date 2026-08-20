@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [
         ("posthog", "1310_provisioning_rate_limit_overrides"),
-        ("warehouse_sources", "0147_add_kalshi_source"),
+        ("warehouse_sources", "0148_repin_qualys_vmdr_api_version_4_0"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
