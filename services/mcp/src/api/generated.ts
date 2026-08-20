@@ -34034,6 +34034,62 @@ export namespace Schemas {
     }
 
     /**
+     * * `PostHogWarehouse` - PostHog warehouse
+     * * `Redshift` - Redshift
+     * * `Snowflake` - Snowflake
+     * * `BigQuery` - BigQuery
+     * * `Postgres` - Postgres
+     * * `Databricks` - Databricks
+     * * `AzureBlob` - Azure Blob
+     * * `S3` - S3
+     */
+    export type ExternalDataDestinationTypeEnum = typeof ExternalDataDestinationTypeEnum[keyof typeof ExternalDataDestinationTypeEnum];
+
+
+    export const ExternalDataDestinationTypeEnum = {
+      PostHogWarehouse: 'PostHogWarehouse',
+      Redshift: 'Redshift',
+      Snowflake: 'Snowflake',
+      BigQuery: 'BigQuery',
+      Postgres: 'Postgres',
+      Databricks: 'Databricks',
+      AzureBlob: 'AzureBlob',
+      S3: 'S3',
+    } as const;
+
+    export interface ExternalDataDestination {
+      readonly id: string;
+      /** Where synced rows are written. The PostHog warehouse is managed for you, so you cannot create one here.
+       *
+       * * `PostHogWarehouse` - PostHog warehouse
+       * * `Redshift` - Redshift
+       * * `Snowflake` - Snowflake
+       * * `BigQuery` - BigQuery
+       * * `Postgres` - Postgres
+       * * `Databricks` - Databricks
+       * * `AzureBlob` - Azure Blob
+       * * `S3` - S3 */
+      type: ExternalDataDestinationTypeEnum;
+      /**
+         * Human-readable name shown when picking destinations for a source or table.
+         * @maxLength 400
+         */
+      name: string;
+      /** Settings for this destination: target database, schema or dataset, bucket and prefix, file format. Credentials are not stored here. They live on the linked integration. */
+      config?: unknown;
+      /**
+         * Integration holding this destination's credentials. Required for every type except the PostHog warehouse.
+         * @nullable
+         */
+      integration?: number | null;
+      /** Whether this is the managed PostHog warehouse destination. */
+      readonly is_posthog_warehouse: boolean;
+      readonly created_at: string;
+      /** @nullable */
+      readonly created_by: number | null;
+    }
+
+    /**
      * @nullable
      */
     export type ExternalDataSchemaTable = { [key: string]: unknown } | null;
@@ -51143,6 +51199,15 @@ export namespace Schemas {
       results: ExportedAsset[];
     }
 
+    export interface PaginatedExternalDataDestinationList {
+      count: number;
+      /** @nullable */
+      next?: string | null;
+      /** @nullable */
+      previous?: string | null;
+      results: ExternalDataDestination[];
+    }
+
     export interface PaginatedExternalDataSchemaList {
       count: number;
       /** @nullable */
@@ -58784,6 +58849,38 @@ export namespace Schemas {
          * @nullable
          */
       readonly user_access_level?: string | null;
+    }
+
+    export interface PatchedExternalDataDestination {
+      readonly id?: string;
+      /** Where synced rows are written. The PostHog warehouse is managed for you, so you cannot create one here.
+       *
+       * * `PostHogWarehouse` - PostHog warehouse
+       * * `Redshift` - Redshift
+       * * `Snowflake` - Snowflake
+       * * `BigQuery` - BigQuery
+       * * `Postgres` - Postgres
+       * * `Databricks` - Databricks
+       * * `AzureBlob` - Azure Blob
+       * * `S3` - S3 */
+      type?: ExternalDataDestinationTypeEnum;
+      /**
+         * Human-readable name shown when picking destinations for a source or table.
+         * @maxLength 400
+         */
+      name?: string;
+      /** Settings for this destination: target database, schema or dataset, bucket and prefix, file format. Credentials are not stored here. They live on the linked integration. */
+      config?: unknown;
+      /**
+         * Integration holding this destination's credentials. Required for every type except the PostHog warehouse.
+         * @nullable
+         */
+      integration?: number | null;
+      /** Whether this is the managed PostHog warehouse destination. */
+      readonly is_posthog_warehouse?: boolean;
+      readonly created_at?: string;
+      /** @nullable */
+      readonly created_by?: number | null;
     }
 
     /**
@@ -88275,6 +88372,17 @@ export namespace Schemas {
     offset?: number;
     };
 
+    export type ExternalDataDestinationsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
+    };
+
     export type ExternalDataSchemasListParams = {
     /**
      * Number of results to return per page.
@@ -88298,7 +88406,39 @@ export namespace Schemas {
       detail?: string;
     };
 
-    export type ExternalDataSchemasLogsRetrieveParams = {
+    export type ExternalDataSchemasDestinationsRetrieveParams = {
+    /**
+     * Only return entries after this ISO 8601 timestamp. Defaults to 7 days ago; pass an explicit value to read further back.
+     */
+    after?: string;
+    /**
+     * Only return entries before this ISO 8601 timestamp.
+     */
+    before?: string;
+    /**
+     * Filter logs to a specific execution instance.
+     * @minLength 1
+     */
+    instance_id?: string;
+    /**
+     * Comma-separated log levels to include, e.g. 'WARN,ERROR'. Valid levels: DEBUG, LOG, INFO, WARN, ERROR.
+     * @minLength 1
+     */
+    level?: string;
+    /**
+     * Maximum number of log entries to return (1-500, default 50).
+     * @minimum 1
+     * @maximum 500
+     */
+    limit?: number;
+    /**
+     * Case-insensitive substring search across log messages.
+     * @minLength 1
+     */
+    search?: string;
+    };
+
+    export type ExternalDataSchemasDestinationsPartialUpdateParams = {
     /**
      * Only return entries after this ISO 8601 timestamp. Defaults to 7 days ago; pass an explicit value to read further back.
      */
