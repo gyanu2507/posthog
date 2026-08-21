@@ -1,7 +1,9 @@
 import { FileMagnifyingGlassIcon } from "@phosphor-icons/react";
 import type { ReportChannelView } from "@posthog/core/inbox/reportChannelScope";
 import {
+  Button,
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -135,9 +137,23 @@ export function ChannelReportsSection({
                 ? "Showing reports suggested for you. Open the filter to see every report in this space."
                 : filtersActive || filters.search
                   ? "Try a different search or clear the filters."
-                  : "Reports your agents file show up here."}
+                  : view.kind === "channel"
+                    ? "Reports filed to this space show up here. The inbox has every report."
+                    : "Reports your agents file show up here."}
             </EmptyDescription>
           </EmptyHeader>
+          {!filtersActive && !filters.search && view.kind === "channel" && (
+            <EmptyContent>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => navigateToInbox()}
+              >
+                Open inbox
+              </Button>
+            </EmptyContent>
+          )}
         </Empty>
       );
     }

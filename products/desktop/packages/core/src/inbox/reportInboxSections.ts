@@ -22,7 +22,11 @@ export interface InboxReportSections {
  * an observation, which is monitoring.
  */
 export function reportNeedsDecision(report: SignalReport): boolean {
-  if (report.implementation_pr_url) return true;
+  // Only an open PR is review work; a merged one is history, and the report
+  // classifies by its own state (it outlived its fix if it's still ready).
+  if (report.implementation_pr_url && !report.implementation_pr_merged) {
+    return true;
+  }
   if (report.status === "pending_input" || report.status === "failed") {
     return true;
   }

@@ -34,6 +34,25 @@ describe("reportInboxSections", () => {
       { status: "in_progress", implementation_pr_url: "https://gh/pr/1" },
       "decision",
     ],
+    // A merged PR is history: the report classifies by its own state, so a
+    // still-ready report reads as a decision again, and a running one as
+    // monitoring — never as "review".
+    [
+      {
+        status: "ready",
+        implementation_pr_url: "https://gh/pr/9",
+        implementation_pr_merged: true,
+      },
+      "decision",
+    ],
+    [
+      {
+        status: "in_progress",
+        implementation_pr_url: "https://gh/pr/9",
+        implementation_pr_merged: true,
+      },
+      "monitoring",
+    ],
     [
       {
         status: "ready",

@@ -66,9 +66,14 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
     report.status,
   );
   const continuableTask = findContinuableImplementationTask(reportTasks);
+  // A merged PR is history, not live work: the report only still exists
+  // because evidence kept arriving after the fix, so it reads by its own
+  // state (usually "needs your decision" again) rather than "review the PR".
+  const livePrUrl = report.implementation_pr_merged
+    ? null
+    : report.implementation_pr_url;
   const existingPrUrl =
-    report.implementation_pr_url ??
-    (continuableTask ? getTaskPrUrl(continuableTask) : null);
+    livePrUrl ?? (continuableTask ? getTaskPrUrl(continuableTask) : null);
   const hasExistingPr = !!existingPrUrl || !!continuableTask;
 
   const verdict = deriveReportVerdict(report, { hasExistingPr });

@@ -348,14 +348,19 @@ function InboxReportRow({ report }: { report: SignalReport }) {
                     openExternalUrl(report.implementation_pr_url);
                   }
                 }}
-                title="Open the pull request on GitHub"
+                title={
+                  report.implementation_pr_merged
+                    ? "This report's earlier PR merged, but evidence kept arriving"
+                    : "Open the pull request on GitHub"
+                }
                 className="flex items-center gap-1 rounded border border-(--gray-6) px-1.5 py-0.5 font-mono text-[11px] text-gray-11 hover:bg-(--gray-3) hover:text-gray-12"
               >
                 <GitPullRequestIcon size={11} />
                 #{pr.number}
+                {report.implementation_pr_merged ? " merged" : ""}
               </button>
             )}
-            {report.implementation_pr_url && (
+            {report.implementation_pr_url && !report.implementation_pr_merged && (
               <Button
                 type="button"
                 variant="primary"
