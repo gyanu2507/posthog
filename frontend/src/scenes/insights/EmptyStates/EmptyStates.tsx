@@ -616,6 +616,7 @@ export function InsightValidationError({
     onRetry,
     cta,
     excludeActions = false,
+    excludeSupport = false,
 }: {
     detail: string
     validationErrorCode?: string | null
@@ -623,6 +624,7 @@ export function InsightValidationError({
     onRetry?: () => void
     cta?: JSX.Element
     excludeActions?: boolean
+    excludeSupport?: boolean
 }): JSX.Element {
     const { openSidePanel } = useActions(sidePanelStateLogic)
     const debugWithAI = (): void => openSidePanel(SidePanelTab.Max, MEMORY_LIMIT_AI_PROMPT)
@@ -682,7 +684,7 @@ export function InsightValidationError({
                     defaultCta
                 ))}
 
-            {detail.includes('Exclusion') && (
+            {detail.includes('Exclusion') && !excludeSupport && (
                 <div className="mt-4">
                     <Link
                         data-attr="insight-funnels-emptystate-help"
@@ -806,6 +808,8 @@ export interface InsightErrorStateProps {
     queryId?: string | null
     retryAfter?: string | null
     retryLoading?: boolean
+    excludeSupport?: boolean
+    excludeQueryId?: boolean
     excludeDetail?: boolean
     excludeActions?: boolean
     supportOnly?: boolean
@@ -820,6 +824,8 @@ export function InsightErrorState({
     queryId,
     retryAfter,
     retryLoading = false,
+    excludeSupport = false,
+    excludeQueryId = false,
     excludeDetail = false,
     excludeActions = false,
     supportOnly = false,
@@ -885,13 +891,13 @@ export function InsightErrorState({
             {!supportOnly && (
                 <div className="mt-4">
                     {remediation && <p>{remediation}</p>}
-                    {!excludeDetail && showBugReport && <p>{bugReportLink}</p>}
+                    {!excludeDetail && !excludeSupport && showBugReport && <p>{bugReportLink}</p>}
                 </div>
             )}
 
             {/* Outside the excludeDetail gate: self-hosted sets excludeDetail=true, but
                 supportOnly still needs the bug-report path or it dead-ends. */}
-            {supportOnly && <div className="mt-4">{bugReportLink}</div>}
+            {supportOnly && !excludeSupport && <div className="mt-4">{bugReportLink}</div>}
 
             {!excludeActions && errorKind !== 'permission' && (
                 <div className="flex gap-2 mt-4">
@@ -903,7 +909,7 @@ export function InsightErrorState({
                     {fixWithAIComponent ?? null}
                 </div>
             )}
-            <QueryIdDisplay queryId={queryId} />
+            {!excludeQueryId && <QueryIdDisplay queryId={queryId} />}
         </div>
     )
 }
