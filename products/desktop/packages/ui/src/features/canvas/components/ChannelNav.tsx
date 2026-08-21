@@ -30,7 +30,6 @@ import { useCommandCenterActiveCount } from "@posthog/ui/features/command-center
 import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
 import { useReportsInboxEnabled } from "@posthog/ui/features/feature-flags/useReportsInboxEnabled";
-import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { openSettings } from "@posthog/ui/features/settings/hooks/useOpenSettings";
 import { CountBadge } from "@posthog/ui/primitives/CountBadge";
 import { LoopIcon } from "@posthog/ui/primitives/LoopIcon";
@@ -50,8 +49,6 @@ import {
   useState,
 } from "react";
 import { ActivityHoverCard } from "./ActivityHoverCard";
-
-const INBOX_REFETCH_INTERVAL_MS = 60_000;
 
 const ICON_BADGE_CLASS =
   "-top-1 -right-1 absolute h-3.5 min-w-3.5 w-auto px-1 font-semibold text-[9px] ring-2 ring-chrome";
@@ -193,10 +190,6 @@ export function ChannelNav() {
   const reportsInboxEnabled = useReportsInboxEnabled();
   const showInbox = !channelReportsEnabled || reportsInboxEnabled;
 
-  const { counts } = useInboxAllReports({
-    ignoreFilters: true,
-    refetchIntervalMs: INBOX_REFETCH_INTERVAL_MS,
-  });
   const { unreadCount: unseenActivity } = useTaskActivity();
   const commandCenterCount = useCommandCenterActiveCount();
 
@@ -237,9 +230,6 @@ export function ChannelNav() {
             shortcut={formatHotkey(SHORTCUTS.INBOX)}
             isActive={isInbox}
             onClick={withTrack("inbox", navigateToInbox)}
-            badge={
-              <CountBadge count={counts.pulls} className={ICON_BADGE_CLASS} />
-            }
           />
         )}
         <ActivityNavItem
