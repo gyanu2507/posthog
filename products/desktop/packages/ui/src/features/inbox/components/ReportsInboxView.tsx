@@ -5,12 +5,16 @@ import {
   GitPullRequestIcon,
 } from "@phosphor-icons/react";
 import { humanizeIdentifier } from "@posthog/core/inbox/activityLog";
+import {
+  deriveHeadline,
+  humanizeReportTitle,
+  parsePrUrl,
+} from "@posthog/core/inbox/reportPresentation";
 import { INBOX_DISMISSED_STATUS_FILTER } from "@posthog/core/inbox/reportFiltering";
 import {
   buildInboxReportSections,
   type InboxReportSort,
 } from "@posthog/core/inbox/reportInboxSections";
-import { humanizeReportTitle } from "@posthog/core/inbox/reportPresentation";
 import {
   Button,
   DropdownMenu,
@@ -27,6 +31,9 @@ import {
 } from "@posthog/quill";
 import type { SignalReport } from "@posthog/shared/types";
 import { InboxScopeSelect } from "@posthog/ui/features/inbox/components/InboxScopeSelect";
+import { InboxSearchFilterBar } from "@posthog/ui/features/inbox/components/InboxSearchFilterBar";
+import { SuggestedReviewerAvatarStack } from "@posthog/ui/features/inbox/components/SuggestedReviewerAvatarStack";
+import { useInboxReportDismissAction } from "@posthog/ui/features/inbox/hooks/useInboxReportDismissAction";
 import {
   KeyCap,
   ReportTriageFocus,
@@ -35,8 +42,12 @@ import { SignalReportPriorityBadge } from "@posthog/ui/features/inbox/components
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { useInboxReportsInfinite } from "@posthog/ui/features/inbox/hooks/useInboxReports";
 import { RelativeTimestamp } from "@posthog/ui/primitives/RelativeTimestamp";
-import { navigateToInboxReportDetail } from "@posthog/ui/router/navigationBridge";
+import {
+  navigateToAgents,
+  navigateToInboxReportDetail,
+} from "@posthog/ui/router/navigationBridge";
 import { useEffect, useMemo, useState } from "react";
+import { openExternalUrl } from "@posthog/ui/shell/openExternal";
 
 /** Rows shown per section before "Show more" — a scan, not a scroll. */
 const SECTION_PREVIEW_LIMIT = 5;
@@ -71,7 +82,7 @@ export function ReportsInboxView() {
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
-  } = useInboxAllReports({ ignoreFilters: true });
+  } = useInboxAllReports();
   const [sort, setSort] = useState<InboxReportSort>("evidence");
   const [focusMode, setFocusMode] = useState(false);
 
@@ -125,6 +136,14 @@ export function ReportsInboxView() {
             type="button"
             variant="outline"
             size="sm"
+            onClick={() => navigateToAgents()}
+          >
+            Configure agents
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
             className="gap-1.5"
             disabled={sections.decision.length === 0}
             onClick={() => setFocusMode(true)}
@@ -158,6 +177,8 @@ export function ReportsInboxView() {
           <InboxScopeSelect />
         </div>
       </div>
+
+      <InboxSearchFilterBar searchPlaceholder="Search reports…" />
 
       {isLoading && scopedReports.length === 0 ? (
         <div aria-hidden className="flex flex-col gap-2 pt-2">
@@ -256,46 +277,102 @@ function InboxSection({
   );
 }
 
-// Dense two-line row: what it is, then where it came from; the right edge
-// carries the quantified backing (priority + evidence count).
+// A row carries what the old inbox's cards proved useful: the humanized
+// title, one line of the summary's tl;dr (deciding without opening), where it
+// came from, reviewers, the PR when there is one, and archive on hover — at
+// row density rather than card height.
 function InboxReportRow({ report }: { report: SignalReport }) {
   const products = (report.source_products ?? [])
     .map((product) => humanizeIdentifier(product).toLowerCase())
     .join(" · ");
+  const headline = useMemo(
+    () => deriveHeadline(report.summary),
+    [report.summary],
+  );
+  const pr = report.implementation_pr_url
+    ? parsePrUrl(report.implementation_pr_url)
+    : null;
+  const { actionButton: archiveButton, dialog: archiveDialog } =
+    useInboxReportDismissAction(report);
   return (
-    <button
-      type="button"
-      onClick={() => navigateToInboxReportDetail(report.id)}
-      className="flex w-full items-center gap-3 rounded-(--radius-2) border border-border bg-(--color-panel-solid) px-3 py-2 text-left transition hover:border-(--gray-6) hover:bg-(--gray-2)"
-    >
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate font-medium text-[13px] text-gray-12">
-            {humanizeReportTitle(report.title, "Untitled report")}
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => navigateToInboxReportDetail(report.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            navigateToInboxReportDetail(report.id);
+          }
+        }}
+        className="group flex w-full cursor-pointer items-center gap-3 rounded-(--radius-2) border border-border bg-(--color-panel-solid) px-3 py-2 text-left transition hover:border-(--gray-6) hover:bg-(--gray-2)"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex items-center gap-1.5">
+            <span className="truncate font-medium text-[13px] text-gray-12">
+              {humanizeReportTitle(report.title, "Untitled report")}
+            </span>
           </span>
-          {report.implementation_pr_url && (
-            <GitPullRequestIcon
-              size={12}
-              className="shrink-0 text-(--gray-9)"
-              aria-label="Has a pull request"
-            />
+          {headline && (
+            <span className="line-clamp-1 text-[12px] text-gray-11">
+              {headline}
+            </span>
           )}
-        </span>
-        <span className="flex items-center gap-1.5 text-[11.5px] text-gray-10">
-          {products && <span className="truncate">{products}</span>}
-          <RelativeTimestamp
-            timestamp={report.created_at}
-            className="shrink-0 text-[11.5px]"
-          />
+          <span className="flex items-center gap-1.5 text-[11.5px] text-gray-10">
+            {products && <span className="truncate">{products}</span>}
+            <RelativeTimestamp
+              timestamp={report.created_at}
+              className="shrink-0 text-[11.5px]"
+            />
+          </span>
+        </div>
+        <span className="flex shrink-0 items-center gap-2">
+          <SuggestedReviewerAvatarStack report={report} />
+          <SignalReportPriorityBadge priority={report.priority} />
+          <span className="font-mono text-[12px] text-gray-11 tabular-nums">
+            {report.signal_count} signal{report.signal_count === 1 ? "" : "s"}
+          </span>
+          {/* Acting on a row must not also open it. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: propagation guard for the buttons inside, not interactive itself */}
+          <span
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            className="flex items-center gap-1.5"
+          >
+            {pr && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (report.implementation_pr_url) {
+                    openExternalUrl(report.implementation_pr_url);
+                  }
+                }}
+                title="Open the pull request on GitHub"
+                className="flex items-center gap-1 rounded border border-(--gray-6) px-1.5 py-0.5 font-mono text-[11px] text-gray-11 hover:bg-(--gray-3) hover:text-gray-12"
+              >
+                <GitPullRequestIcon size={11} />
+                #{pr.number}
+              </button>
+            )}
+            {report.implementation_pr_url && (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={() => navigateToInboxReportDetail(report.id)}
+              >
+                Review
+              </Button>
+            )}
+            <span className="opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+              {archiveButton}
+            </span>
+          </span>
         </span>
       </div>
-      <span className="flex shrink-0 items-center gap-2">
-        <SignalReportPriorityBadge priority={report.priority} />
-        <span className="font-mono text-[12px] text-gray-11 tabular-nums">
-          {report.signal_count} signal{report.signal_count === 1 ? "" : "s"}
-        </span>
-      </span>
-    </button>
+      {archiveDialog}
+    </>
   );
 }
 
