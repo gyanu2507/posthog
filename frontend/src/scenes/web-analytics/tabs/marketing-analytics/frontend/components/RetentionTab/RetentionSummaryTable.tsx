@@ -65,7 +65,12 @@ export function RetentionSummaryTable({
                         <div
                             className="rounded px-2 py-1"
                             // eslint-disable-next-line react/forbid-dom-props
-                            style={{ backgroundColor: gradateColor(CELL_COLOR, cell.rate, CELL_COLOR_FLOOR) }}
+                            style={{
+                                backgroundColor: gradateColor(CELL_COLOR, cell.rate, CELL_COLOR_FLOOR),
+                                // Flip to white once the blue saturates, matching the per-cohort and heatmap
+                                // cells, so high rates stay readable instead of dark text on solid blue.
+                                color: cell.rate > 0.4 ? '#fff' : 'var(--text-3000)',
+                            }}
                         >
                             {percentage(cell.rate, 1)}
                         </div>
