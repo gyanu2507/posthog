@@ -4989,10 +4989,32 @@ async def test_postgres_switch_to_xmin_rebuilds_table(team, postgres_config, pos
 DESTINATION_SCHEMA = "destination_schema"
 
 
-async def _postgres_destination(team: Team, postgres_config: dict, connection) -> ExternalDataDestination:
+@contextlib.asynccontextmanager
+async def _destination_connection(postgres_config: dict):
+    """A short-lived connection to the destination database.
+
+    Deliberately not the `postgres_connection` fixture: the pipeline severs connections
+    mid-test, and a torn connection reaches these assertions as a closed cursor rather than
+    as anything that points at the cause.
+    """
+    connection = await psycopg.AsyncConnection.connect(
+        user=postgres_config["user"],
+        password=postgres_config["password"],
+        dbname=postgres_config["database"],
+        host=postgres_config["host"],
+        port=postgres_config["port"],
+        autocommit=True,
+    )
+    try:
+        yield connection
+    finally:
+        await connection.close()
+
+
+async def _postgres_destination(team: Team, postgres_config: dict) -> ExternalDataDestination:
     """A Postgres destination pointed at the same database the source fixtures use."""
-    await connection.execute(f"CREATE SCHEMA IF NOT EXISTS {DESTINATION_SCHEMA}")
-    await connection.commit()
+    async with _destination_connection(postgres_config) as connection:
+        await connection.execute(f"CREATE SCHEMA IF NOT EXISTS {DESTINATION_SCHEMA}")
 
     integration = await sync_to_async(Integration.objects.create)(
         team=team,
@@ -5020,22 +5042,23 @@ async def _postgres_destination(team: Team, postgres_config: dict, connection) -
     return await sync_to_async(create)()
 
 
-async def _destination_rows(connection, table: str) -> list[tuple]:
+async def _destination_rows(postgres_config: dict, table: str) -> list[tuple]:
     """Rows at the destination. Identifiers are quoted, so the table keeps the resource's case."""
-    async with connection.cursor() as cursor:
-        await cursor.execute(f'SELECT id FROM "{DESTINATION_SCHEMA}"."{table}" ORDER BY id')
-        return await cursor.fetchall()
+    async with _destination_connection(postgres_config) as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(f'SELECT id FROM "{DESTINATION_SCHEMA}"."{table}" ORDER BY id')
+            return await cursor.fetchall()
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_a_source_syncs_to_a_postgres_destination(
-    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+    team, stripe_charge, mock_stripe_client, postgres_config, setup_postgres_test_db
 ):
     if _current_pipeline_mode != "v3":
         pytest.skip("destinations only apply to pipeline_v3")
 
-    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    destination = await _postgres_destination(team, postgres_config)
     warehouse = await sync_to_async(get_or_create_warehouse_destination)(team.pk)
 
     await _run(
@@ -5052,19 +5075,19 @@ async def test_a_source_syncs_to_a_postgres_destination(
     res = await sync_to_async(execute_hogql_query)("SELECT id FROM stripe_charge", team)
     assert len(res.results) > 0
 
-    rows = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+    rows = await _destination_rows(postgres_config, STRIPE_CHARGE_RESOURCE_NAME)
     assert len(rows) == len(res.results)
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_a_run_with_a_destination_bills_for_both(
-    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+    team, stripe_charge, mock_stripe_client, postgres_config, setup_postgres_test_db
 ):
     if _current_pipeline_mode != "v3":
         pytest.skip("destinations only apply to pipeline_v3")
 
-    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    destination = await _postgres_destination(team, postgres_config)
     warehouse = await sync_to_async(get_or_create_warehouse_destination)(team.pk)
 
     await _run(
@@ -5087,12 +5110,12 @@ async def test_a_run_with_a_destination_bills_for_both(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating(
-    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+    team, stripe_charge, mock_stripe_client, postgres_config, setup_postgres_test_db
 ):
     if _current_pipeline_mode != "v3":
         pytest.skip("destinations only apply to pipeline_v3")
 
-    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    destination = await _postgres_destination(team, postgres_config)
     warehouse = await sync_to_async(get_or_create_warehouse_destination)(team.pk)
     run_kwargs: dict[str, Any] = {
         "team": team,
@@ -5105,10 +5128,10 @@ async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating
     }
 
     await _run(**run_kwargs)
-    after_first = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+    after_first = await _destination_rows(postgres_config, STRIPE_CHARGE_RESOURCE_NAME)
 
     await _run(**run_kwargs)
-    after_second = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+    after_second = await _destination_rows(postgres_config, STRIPE_CHARGE_RESOURCE_NAME)
 
     # Same source rows delivered twice must not double up at the destination.
     assert after_second == after_first
@@ -5117,7 +5140,7 @@ async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_a_source_can_sync_to_a_destination_and_not_to_posthog(
-    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+    team, stripe_charge, mock_stripe_client, postgres_config, setup_postgres_test_db
 ):
     """Selecting destinations replaces the default rather than adding to it.
 
@@ -5129,7 +5152,7 @@ async def test_a_source_can_sync_to_a_destination_and_not_to_posthog(
     if _current_pipeline_mode != "v3":
         pytest.skip("destinations only apply to pipeline_v3")
 
-    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    destination = await _postgres_destination(team, postgres_config)
 
     await _run(
         team=team,
@@ -5143,7 +5166,7 @@ async def test_a_source_can_sync_to_a_destination_and_not_to_posthog(
         ignore_assertions=True,
     )
 
-    rows = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+    rows = await _destination_rows(postgres_config, STRIPE_CHARGE_RESOURCE_NAME)
     assert len(rows) > 0
 
     # Nothing was registered in PostHog, so there is no table to query.
