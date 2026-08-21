@@ -2,6 +2,7 @@ import {
   CaretDownIcon,
   EnvelopeSimpleIcon,
   GitPullRequestIcon,
+  CrosshairIcon,
 } from "@phosphor-icons/react";
 import { humanizeIdentifier } from "@posthog/core/inbox/activityLog";
 import {
@@ -31,6 +32,11 @@ import {
 import type { SignalReport } from "@posthog/shared/types";
 import { InboxScopeSelect } from "@posthog/ui/features/inbox/components/InboxScopeSelect";
 import { InboxSearchFilterBar } from "@posthog/ui/features/inbox/components/InboxSearchFilterBar";
+import {
+  KeyCap,
+  ReportTriageFocus,
+} from "@posthog/ui/features/inbox/components/ReportTriageFocus";
+import { useTriageFocusEnabled } from "@posthog/ui/features/feature-flags/useTriageFocusEnabled";
 import { SuggestedReviewerAvatarStack } from "@posthog/ui/features/inbox/components/SuggestedReviewerAvatarStack";
 import { useInboxReportDismissAction } from "@posthog/ui/features/inbox/hooks/useInboxReportDismissAction";
 import { useInboxSectionCounts } from "@posthog/ui/features/inbox/hooks/useInboxSectionCounts";
@@ -44,6 +50,16 @@ import {
 } from "@posthog/ui/router/navigationBridge";
 import { useEffect, useMemo, useState } from "react";
 import { openExternalUrl } from "@posthog/ui/shell/openExternal";
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
+}
 
 /** Rows shown per section before "Show more" — a scan, not a scroll. */
 const SECTION_PREVIEW_LIMIT = 5;
@@ -71,6 +87,8 @@ export function ReportsInboxView() {
     fetchNextPage,
     searchQuery,
   } = useInboxAllReports({ statusFilter: REPORTS_INBOX_STATUS_FILTER });
+  const triageFocusEnabled = useTriageFocusEnabled();
+  const [focusMode, setFocusMode] = useState(false);
 
   const sections = useMemo(
     () => partitionInboxReports(scopedReports),
@@ -109,6 +127,31 @@ export function ReportsInboxView() {
     fetchNextPage,
   ]);
 
+  // Focus mode from anywhere on the page, matching the button's advertised key.
+  useEffect(() => {
+    if (!triageFocusEnabled || focusMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "f" && sections.decision.length > 0) {
+        event.preventDefault();
+        setFocusMode(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [triageFocusEnabled, focusMode, sections.decision.length]);
+
+  if (triageFocusEnabled && focusMode) {
+    return (
+      <ReportTriageFocus
+        reports={sections.decision}
+        allReports={allReports}
+        onExit={() => setFocusMode(false)}
+      />
+    );
+  }
+
   const isEmpty = searchActive
     ? sections.decision.length === 0 && sections.monitoring.length === 0
     : !serverCounts.isLoading &&
@@ -136,6 +179,20 @@ export function ReportsInboxView() {
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-2">
+          {triageFocusEnabled && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={sections.decision.length === 0}
+              onClick={() => setFocusMode(true)}
+            >
+              <CrosshairIcon size={13} />
+              Focus mode
+              <KeyCap>F</KeyCap>
+            </Button>
+          )}
           <InboxScopeSelect />
         </div>
       </div>
