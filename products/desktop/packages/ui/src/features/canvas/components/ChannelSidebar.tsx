@@ -20,11 +20,6 @@ import {
 } from "@posthog/core/canvas/channelItems";
 import { isGeneralChannel } from "@posthog/core/canvas/channelName";
 import {
-  channelReportView,
-  generalReportView,
-  type ReportChannelView,
-} from "@posthog/core/inbox/reportChannelScope";
-import {
   Button,
   cn,
   Empty,
@@ -40,34 +35,25 @@ import {
   TabsList,
   TabsTrigger,
 } from "@posthog/quill";
-import { CountBadge } from "@posthog/ui/primitives/CountBadge";
 import { LOOPS_FLAG } from "@posthog/shared";
 import type { Task } from "@posthog/shared/domain-types";
 import { ChannelBackRow } from "@posthog/ui/features/canvas/components/ChannelBackRow";
 import { ChannelFilterMenu } from "@posthog/ui/features/canvas/components/ChannelFilterMenu";
 import { ChannelItemDragPreview } from "@posthog/ui/features/canvas/components/ChannelItemDragPreview";
 import { ChannelItemRow } from "@posthog/ui/features/canvas/components/ChannelItemRow";
-import { ChannelReportsSection } from "@posthog/ui/features/canvas/components/ChannelReportsSection";
 import { ChannelsFab } from "@posthog/ui/features/canvas/components/ChannelsFab";
 import { cnHeaderButton } from "@posthog/ui/features/canvas/components/channelHeaderButton";
 import {
   type ChannelPageKey,
   channelPageLabel,
 } from "@posthog/ui/features/canvas/components/channelPages";
-import { ReportFilterControls } from "@posthog/ui/features/canvas/components/ReportFilterControls";
 import { useChannelItems } from "@posthog/ui/features/canvas/hooks/useChannelItems";
-import {
-  type ChannelReportsFilters,
-  DEFAULT_CHANNEL_REPORTS_FILTERS,
-  useChannelReports,
-} from "@posthog/ui/features/canvas/hooks/useChannelReports";
 import { useChannels } from "@posthog/ui/features/canvas/hooks/useChannels";
 import { useChannelTasksRunState } from "@posthog/ui/features/canvas/hooks/useChannelTasksRunState";
 import { useLocalDayStart } from "@posthog/ui/features/canvas/hooks/useLocalDayStart";
 import { SHORTCUTS } from "@posthog/ui/features/command/keyboard-shortcuts";
 import { useCommandCenterStore } from "@posthog/ui/features/command-center/commandCenterStore";
 import { placeTaskInCommandCenter } from "@posthog/ui/features/command-center/placeTaskInCommandCenter";
-import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
 import { SidebarKbdHint } from "@posthog/ui/features/sidebar/components/items/SidebarKbdHint";
 import { MarqueeOverlay } from "@posthog/ui/features/sidebar/components/MarqueeOverlay";
@@ -98,13 +84,11 @@ const RECENTS_CAP = 30;
 const log = logger.scope("channel-sidebar");
 
 /** The list holds two kinds of thing, and shows one of them at a time. */
-type ChannelTab = ChannelItemModel["kind"] | "report";
+type ChannelTab = ChannelItemModel["kind"];
 
 const CHANNEL_TABS: readonly {
   value: ChannelTab;
   label: string;
-  /** Count shown on the inactive tab; the number of decisions waiting. */
-  badge?: number;
 }[] = [
   { value: "task", label: "Sessions" },
   { value: "canvas", label: "Canvases" },
@@ -127,11 +111,9 @@ function RecentSectionHeader({
   showCreatedBy,
   showRunFilters,
   filtersActive,
-  showItemControls = true,
-  filterControls,
 }: {
   tab: ChannelTab;
-  tabs: readonly { value: ChannelTab; label: string; badge?: number }[];
+  tabs: readonly { value: ChannelTab; label: string }[];
   onTabChange: (tab: ChannelTab) => void;
   searchOpen: boolean;
   onToggleSearch: () => void;
@@ -151,12 +133,7 @@ function RecentSectionHeader({
   /** False on the canvases tab: a canvas has no run to ask these about. */
   showRunFilters: boolean;
   filtersActive: boolean;
-  /** False on the Reports tab, whose filters render via `filterControls`. */
-  showItemControls?: boolean;
-  /** Replaces the session/canvas filter menu (the Reports tab's controls). */
-  filterControls?: ReactNode;
 }) {
-  const hasControls = showItemControls || !!filterControls;
   return (
     <>
       <div className="flex flex-wrap items-center gap-0.5">
@@ -176,29 +153,18 @@ function RecentSectionHeader({
             variant="line"
             className="quill-tabs-fill h-auto gap-0.5 border-b-0"
           >
-            {/* The count is the working set's own decision count — one number,
-                same population as the list — and only on an inactive tab,
-                where the list isn't already answering it. */}
-            {tabs.map(({ value, label, badge }) => (
+            {tabs.map(({ value, label }) => (
               <TabsTrigger
                 key={value}
                 value={value}
                 className="shrink-0 rounded-sm px-1 py-0.5 text-[13px]"
               >
                 <span className="whitespace-nowrap">{label}</span>
-                {badge != null && badge > 0 && value !== tab && (
-                  <CountBadge
-                    count={badge}
-                    className="ml-1 h-4 min-w-4 text-[9px]"
-                    title={`${badge} report${badge === 1 ? "" : "s"} waiting on a decision`}
-                  />
-                )}
               </TabsTrigger>
             ))}
           </TabsList>
         </Tabs>
-        {hasControls && (
-          <>
+        <>
             <Button
               variant="default"
               size="icon-xs"
@@ -209,8 +175,7 @@ function RecentSectionHeader({
             >
               <MagnifyingGlass size={12} />
             </Button>
-            {filterControls ?? (
-              <ChannelFilterMenu
+            <ChannelFilterMenu
                 filters={filters}
                 onFilterChange={onFilterChange}
                 onClearFilters={onClearFilters}
@@ -220,12 +185,10 @@ function RecentSectionHeader({
                 showCreatedBy={showCreatedBy}
                 showRunFilters={showRunFilters}
                 active={filtersActive}
-              />
-            )}
-          </>
-        )}
+            />
+        </>
       </div>
-      {hasControls && searchOpen && (
+      {searchOpen && (
         <div className="px-1 pb-1">
           <Input
             autoFocus
@@ -233,11 +196,7 @@ function RecentSectionHeader({
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder="Search…"
             aria-label={
-              tab === "canvas"
-                ? "Search canvases"
-                : tab === "report"
-                  ? "Search reports"
-                  : "Search sessions"
+              tab === "canvas" ? "Search canvases" : "Search sessions"
             }
             className="h-6 text-[12px]"
           />
@@ -338,7 +297,6 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const loopsEnabled = useFeatureFlag(LOOPS_FLAG, import.meta.env.DEV);
-  const reportsEnabled = useChannelReportsEnabled();
 
   const { items, actions, me, isLoading, channelMissing } =
     useChannelItems(channelId);
@@ -360,9 +318,6 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
   const setTab = (next: ChannelTab) => setChosenTab({ channelId, tab: next });
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [reportFilters, setReportFilters] = useState<ChannelReportsFilters>(
-    DEFAULT_CHANNEL_REPORTS_FILTERS,
-  );
   const [rawFilters, setFilters] = useState<ChannelItemFilters>(
     DEFAULT_CHANNEL_ITEM_FILTERS,
   );
@@ -376,46 +331,7 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
   // so its name is no longer the backend's.
   const channel = channels.find((c) => c.id === channelId);
   const isPersonalChannel = channel?.channelType === "personal";
-  // The general space is the reports catch-all: it lists every report, while any
-  // other space lists only reports assigned to it.
-  const reportView: ReportChannelView =
-    channel &&
-    !isGeneralChannel({ channel_type: channel.channelType, name: channel.name })
-      ? channelReportView(channelId)
-      : generalReportView();
-  // The badge counts what the tab shows: same hook, same filters (minus
-  // transient search and status/priority excursions), same eligibility. A
-  // badge computed from a different population than the list is a bug the
-  // reader can see.
-  const badgeFilters = useMemo(
-    () => ({
-      ...reportFilters,
-      search: "",
-      status: "all" as const,
-      priorities: [],
-    }),
-    [reportFilters],
-  );
-  const { workingSet } = useChannelReports(reportView, badgeFilters, {
-    enabled: reportsEnabled,
-  });
-  const reportDecisionCount = workingSet?.decisionCount ?? 0;
-  const visibleTabs = useMemo(
-    () =>
-      reportsEnabled
-        ? [
-            // Reports lead: they arrive on their own and carry the dot, so
-            // they take the first slot; the space still opens on its sessions.
-            {
-              value: "report" as ChannelTab,
-              label: "Reports",
-              badge: reportDecisionCount,
-            },
-            ...CHANNEL_TABS,
-          ]
-        : CHANNEL_TABS,
-    [reportsEnabled, reportDecisionCount],
-  );
+  const visibleTabs = CHANNEL_TABS;
   // The tab is the list, so everything below it — the filters, the empty state,
   // the sections — is about one kind of thing at a time.
   const tabItems = useMemo(
@@ -465,20 +381,6 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
     const task = pathname.match(/\/tasks\/([^/]+)$/);
     return task ? `task:${task[1]}` : null;
   }, [pathname]);
-  const activeReportId = useMemo(() => {
-    const match = pathname.match(
-      /\/(?:inbox\/(?:reports|pulls|dismissed)|website\/[^/]+\/reports)\/([^/]+)$/,
-    );
-    return match ? match[1] : null;
-  }, [pathname]);
-
-  // Opening a report (feed card, deep link, old inbox link) cuts the sidebar
-  // over to Reports so the open report shows highlighted in its list. Only on
-  // report change — the user can still switch tabs while the report stays open.
-  useEffect(() => {
-    if (!reportsEnabled || !activeReportId) return;
-    setChosenTab({ channelId, tab: "report" });
-  }, [reportsEnabled, activeReportId, channelId]);
 
   // Pins sort to the top because a pin is a request not to lose the thing:
   // below the chosen order it would fall off the end of the cap. The cap is
@@ -809,47 +711,7 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
         ref={listAnchorRef}
         className="relative mt-2 flex min-h-0 flex-1 flex-col"
       >
-        {tab === "report" && (
-          <>
-            <div className="border-border border-b px-2">
-              <RecentSectionHeader
-                tab={tab}
-                tabs={visibleTabs}
-                onTabChange={setTab}
-                showItemControls={false}
-                filterControls={
-                  <ReportFilterControls
-                    filters={reportFilters}
-                    onChange={setReportFilters}
-                    compact
-                  />
-                }
-                searchOpen={searchOpen}
-                onToggleSearch={() => {
-                  if (searchOpen) setQuery("");
-                  setSearchOpen(!searchOpen);
-                }}
-                query={query}
-                onQueryChange={setQuery}
-                filters={filters}
-                onFilterChange={() => {}}
-                onClearFilters={() => {}}
-                sort={sort}
-                onSortChange={() => {}}
-                sources={sources}
-                showCreatedBy={false}
-                showRunFilters={false}
-                filtersActive={false}
-              />
-            </div>
-            <ChannelReportsSection
-              view={reportView}
-              activeReportId={activeReportId}
-              filters={{ ...reportFilters, search: query }}
-            />
-          </>
-        )}
-        {tab !== "report" && showHeader && (
+        {showHeader && (
           <div className="border-border border-b px-2">
             <RecentSectionHeader
               tab={tab}
@@ -881,8 +743,7 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
         )}
         {/* Pin and unpin stay reachable from the row's menu and its context
             menu, so the drag adds no keyboard-only path. */}
-        {tab !== "report" && (
-          <>
+        <>
             {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop container */}
             <div
               aria-busy={isLoading}
@@ -942,19 +803,16 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
             </div>
             <ChannelsFab channelId={channelId} />
             <MarqueeOverlay rect={marquee} />
-          </>
-        )}
+        </>
       </div>
 
       {/* Below the list rather than floating over it: the bottom rows are where
           a shift-click range usually ends, and the FAB already sits there. */}
-      {tab !== "report" && (
-        <SidebarBulkActionBar
+      <SidebarBulkActionBar
           actions={bulkActions}
           onClearSelection={clearSelection}
           onArchive={archiveConfirm.requestArchive}
         />
-      )}
       {archiveConfirm.dialog}
 
       {pinDrag.drag ? (
