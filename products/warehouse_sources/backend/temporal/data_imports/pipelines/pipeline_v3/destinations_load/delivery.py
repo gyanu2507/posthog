@@ -135,13 +135,18 @@ def deliver_batch_to_destinations(
     for destination in pending:
         destination_id = str(destination.id)
 
-        if is_batch_already_processed(
+        already_written = is_batch_already_processed(
             export_signal.team_id,
             export_signal.schema_id,
             export_signal.run_uuid,
             export_signal.batch_index,
             destination_id=destination_id,
-        ):
+        )
+
+        # Writing and publishing are separate. The extraction side sends the last batch twice,
+        # once while processing and once flagged final, so skipping the whole batch because it
+        # was already written would leave a full refresh staged and never swapped in.
+        if already_written and not export_signal.is_final_batch:
             logger.debug(
                 "destination_batch_already_delivered",
                 destination_type=destination.type,
@@ -160,8 +165,9 @@ def deliver_batch_to_destinations(
         try:
             ensure_builtin_destination_writers_registered()
             writer = resolve_destination_writer(run_ctx)
-            async_to_sync(writer.prepare_run)(run_ctx)
-            async_to_sync(_write)(writer, export_signal, batch_ctx)
+            if not already_written:
+                async_to_sync(writer.prepare_run)(run_ctx)
+                async_to_sync(_write)(writer, export_signal, batch_ctx)
             if export_signal.is_final_batch:
                 # Publish before the marker: a crash in between leaves the batch
                 # re-claimable, and finalizing twice is a no-op.
@@ -175,14 +181,15 @@ def deliver_batch_to_destinations(
             )
             raise DestinationDeliveryError(destination.name, e) from e
 
-        mark_batch_as_processed(
-            export_signal.team_id,
-            export_signal.schema_id,
-            export_signal.run_uuid,
-            export_signal.batch_index,
-            destination_id=destination_id,
-        )
-        written += 1
+        if not already_written:
+            mark_batch_as_processed(
+                export_signal.team_id,
+                export_signal.schema_id,
+                export_signal.run_uuid,
+                export_signal.batch_index,
+                destination_id=destination_id,
+            )
+            written += 1
 
         logger.debug(
             "destination_batch_delivered",
