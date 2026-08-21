@@ -5,6 +5,7 @@ from django.http import HttpResponse
 from parameterized import parameterized
 
 from posthog.constants import AvailableFeature
+from posthog.models.organization import OrganizationMembership
 from posthog.models.personal_api_key import PersonalAPIKey
 from posthog.models.utils import generate_random_token_personal, hash_key_value
 
@@ -25,6 +26,47 @@ class TestSurfaceLimitResolution(BaseTest):
 
     def test_no_rows_mean_unrestricted(self) -> None:
         assert surface_limit(self.organization, "mcp", "dashboard") is None
+
+
+class TestMCPAccessSetting(APIBaseTest):
+    def setUp(self) -> None:
+        super().setUp()
+        self.organization.available_product_features = [
+            {
+                "key": AvailableFeature.ORGANIZATION_SECURITY_SETTINGS,
+                "name": AvailableFeature.ORGANIZATION_SECURITY_SETTINGS,
+            }
+        ]
+        self.organization.save()
+        self.organization_membership.level = OrganizationMembership.Level.ADMIN
+        self.organization_membership.save()
+
+    def test_toggle_round_trip_creates_and_deletes_the_wildcard_row(self) -> None:
+        response = self.client.patch("/api/organizations/@current/", {"mcp_access_read_only": True})
+        assert response.status_code == 200
+        assert response.json()["mcp_access_read_only"] is True
+        assert SurfaceAccessLimit.objects.filter(
+            organization=self.organization, surface="mcp", resource="*", max_level="viewer"
+        ).exists()
+
+        response = self.client.patch("/api/organizations/@current/", {"mcp_access_read_only": False})
+        assert response.json()["mcp_access_read_only"] is False
+        assert not SurfaceAccessLimit.objects.filter(organization=self.organization, surface="mcp").exists()
+
+    def test_toggle_keeps_resource_exception_rows(self) -> None:
+        exception = SurfaceAccessLimit.objects.create(
+            organization=self.organization, surface="mcp", resource="feature_flag", max_level="editor"
+        )
+        self.client.patch("/api/organizations/@current/", {"mcp_access_read_only": True})
+        self.client.patch("/api/organizations/@current/", {"mcp_access_read_only": False})
+        assert SurfaceAccessLimit.objects.filter(id=exception.id).exists()
+
+    def test_toggle_requires_the_entitlement(self) -> None:
+        self.organization.available_product_features = []
+        self.organization.save()
+        response = self.client.patch("/api/organizations/@current/", {"mcp_access_read_only": True})
+        assert response.status_code == 400
+        assert response.json()["code"] == "payment_required"
 
 
 class TestMCPReadOnlyEnforcement(APIBaseTest):

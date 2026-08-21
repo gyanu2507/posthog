@@ -216,6 +216,7 @@ export type SettingId =
     | 'organization-proxy'
     | 'organization-roles'
     | 'organization-security'
+    | 'organization-mcp-access'
     | 'organization-personal-api-keys'
     | 'passkeys'
     | 'login-sessions'

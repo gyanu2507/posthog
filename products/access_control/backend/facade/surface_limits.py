@@ -25,6 +25,7 @@ from products.access_control.backend.models.surface_access_limit import SurfaceA
 
 if TYPE_CHECKING:
     from posthog.models.organization import Organization
+    from posthog.models.user import User
 
 # The outbound identity of services/mcp (see its oauth-constants.ts). Surface
 # classification controls the pathway. It is not a defense against a hostile key holder.
@@ -91,3 +92,26 @@ def surface_limit(
     if wildcard in by_resource:
         return SurfaceAccessLimit.MaxLevel(by_resource[wildcard])
     return None
+
+
+def mcp_access_is_read_only(organization: "Organization") -> bool:
+    """Returns True when the organization limits the MCP surface for every resource."""
+    return surface_limit(organization, SurfaceAccessLimit.Surface.MCP) is not None
+
+
+def set_mcp_access_read_only(organization: "Organization", read_only: bool, changed_by: "User | None") -> None:
+    """Creates or deletes the org-wide MCP limit row. Rows that name a resource stay:
+    they are exceptions an admin configured on purpose."""
+    if read_only:
+        SurfaceAccessLimit.objects.update_or_create(
+            organization=organization,
+            surface=SurfaceAccessLimit.Surface.MCP,
+            resource=SurfaceAccessLimit.ALL_RESOURCES,
+            defaults={"max_level": SurfaceAccessLimit.MaxLevel.VIEWER, "created_by": changed_by},
+        )
+    else:
+        SurfaceAccessLimit.objects.filter(
+            organization=organization,
+            surface=SurfaceAccessLimit.Surface.MCP,
+            resource=SurfaceAccessLimit.ALL_RESOURCES,
+        ).delete()

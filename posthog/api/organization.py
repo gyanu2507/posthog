@@ -57,6 +57,8 @@ from posthog.tasks.email import send_posthog_ai_access_request
 from posthog.user_permissions import UserPermissions, UserPermissionsSerializerMixin
 from posthog.utils import get_safe_cache, safe_cache_set
 
+from products.access_control.backend.facade.surface_limits import mcp_access_is_read_only, set_mcp_access_read_only
+
 
 class PremiumMultiorganizationPermission(permissions.BasePermission):
     """Require user to have all necessary premium features on their plan for create access to the endpoint."""
@@ -150,6 +152,10 @@ class OrganizationSerializer(
     projects = serializers.SerializerMethodField()
     metadata = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
+    mcp_access_read_only = serializers.BooleanField(
+        required=False,
+        help_text="When true, requests through the PostHog MCP server can read but not change this organization's data.",
+    )
     logo_media_id = OrgScopedPrimaryKeyRelatedField(
         queryset=UploadedMedia.objects.all(), required=False, allow_null=True
     )
@@ -187,6 +193,7 @@ class OrganizationSerializer(
             "members_can_use_personal_api_keys",
             "members_can_see_org_members",
             "allow_publicly_shared_resources",
+            "mcp_access_read_only",
             "member_count",
             "is_ai_data_processing_approved",
             "is_ai_training_opted_in",
@@ -395,8 +402,27 @@ class OrganizationSerializer(
     def get_member_count(self, organization: Organization) -> int:
         return _cached_per_org("member_count", str(organization.id), lambda: _fetch_member_count(organization))
 
+    def validate_mcp_access_read_only(self, value: bool) -> bool:
+        if self.instance and mcp_access_is_read_only(self.instance) != value:
+            if not self.instance.is_feature_available(AvailableFeature.ORGANIZATION_SECURITY_SETTINGS):
+                raise serializers.ValidationError(
+                    "You must upgrade your plan to configure MCP access.",
+                    code="payment_required",
+                )
+        return value
+
+    def update(self, instance: Organization, validated_data: dict[str, Any]) -> Organization:
+        mcp_read_only = validated_data.pop("mcp_access_read_only", None)
+        organization = super().update(instance, validated_data)
+        if mcp_read_only is not None:
+            set_mcp_access_read_only(organization, mcp_read_only, self.context["request"].user)
+        return organization
+
     @tracer.start_as_current_span("organization_serializer.to_representation")
     def to_representation(self, instance):
+        # The value lives in SurfaceAccessLimit rows, not on the organization row; stage it on
+        # the instance so the declared BooleanField serializes it like a model field.
+        instance.mcp_access_read_only = mcp_access_is_read_only(instance)
         return super().to_representation(instance)
 
 
