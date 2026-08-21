@@ -185,7 +185,7 @@ export function ChannelReportsSection({
               onClick={() => navigateToInbox()}
               className="mt-1 px-1.5 py-1 text-left text-[11.5px] text-gray-10 hover:text-gray-12 hover:underline"
             >
-              {workingSet.remainderCount} more in the inbox
+              View all and triage in the inbox
             </button>
           )}
         </div>
