@@ -1,5 +1,6 @@
 import type { SignalReport, SignalReportPriority } from "@posthog/shared/types";
 
+import { reportNeedsDecision } from "./reportInboxSections";
 import {
   isDismissedReport,
   isExcludedFromInbox,
@@ -128,11 +129,12 @@ export function buildChannelReportList(
 }
 
 /**
- * How many reports the needs-attention section may pin. A digest, not a
- * re-sort: past a handful the section stops answering "what should I look at
- * first" and becomes the same wall it was meant to cut through.
+ * How many reports the sidebar working set may hold. The tab is a working
+ * set, not a list of everything: past this it stops being churnable and turns
+ * back into the wall. The rest of the population lives in the feed and the
+ * global inbox.
  */
-export const NEEDS_ATTENTION_LIMIT = 5;
+export const SIDEBAR_WORKING_SET_LIMIT = 10;
 
 const PRIORITY_RANK: Record<SignalReportPriority, number> = {
   P0: 0,
@@ -142,52 +144,39 @@ const PRIORITY_RANK: Record<SignalReportPriority, number> = {
   P4: 4,
 };
 
-/**
- * Whether a report is waiting on a person right now: ready to act on, holding
- * a PR to review, stuck pending input, or failed and needing a call. Reports
- * the agent is still working (queued/live runs) never pin — there is nothing
- * to do about them yet.
- */
-function reportNeedsPerson(report: SignalReport): boolean {
-  return (
-    !!report.implementation_pr_url ||
-    report.status === "ready" ||
-    report.status === "pending_input" ||
-    report.status === "failed"
-  );
-}
-
-export interface ChannelReportSections {
-  /** Pinned digest: prioritized reports waiting on a person, P0 first. */
-  needsAttention: SignalReport[];
-  /** Everything else, newest-first — the chronological stream. */
-  rest: SignalReport[];
+export interface SidebarWorkingSet {
+  /** Untriaged reports waiting on a person, priority-ordered, hard-capped. */
+  reports: SignalReport[];
+  /** How many live reports the cap and the eligibility rule left out. */
+  remainderCount: number;
 }
 
 /**
- * Split an already-built report list into the pinned needs-attention digest
- * and the chronological rest. Pinning requires a stated priority: the section
- * promises "most important first", and an unprioritized report has no claim to
- * that — it stays in the stream. Within the pin, priority outranks recency;
- * overflow past the cap falls back to the stream in its chronological place.
+ * The sidebar Reports tab's whole content in the default browse state:
+ * decisions waiting on a person, priority-first (unprioritized last, recency
+ * breaking ties), capped hard. No tail below it — already-triaged and
+ * not-yet-actionable reports under the working set generate guilt, not
+ * decisions; the feed and the global inbox carry them.
  */
-export function splitChannelReportSections(
+export function buildSidebarWorkingSet(
   orderedReports: SignalReport[],
-): ChannelReportSections {
-  const needsAttention = orderedReports
-    .filter((report) => reportNeedsPerson(report) && report.priority != null)
+): SidebarWorkingSet {
+  const reports = orderedReports
+    .filter(reportNeedsDecision)
     .sort((a, b) => {
-      const rankDiff =
-        PRIORITY_RANK[a.priority as SignalReportPriority] -
-        PRIORITY_RANK[b.priority as SignalReportPriority];
-      if (rankDiff !== 0) return rankDiff;
+      const aRank = a.priority
+        ? PRIORITY_RANK[a.priority]
+        : Number.MAX_SAFE_INTEGER;
+      const bRank = b.priority
+        ? PRIORITY_RANK[b.priority]
+        : Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
       return reportTimestampMs(b) - reportTimestampMs(a);
     })
-    .slice(0, NEEDS_ATTENTION_LIMIT);
-  const pinnedIds = new Set(needsAttention.map((report) => report.id));
+    .slice(0, SIDEBAR_WORKING_SET_LIMIT);
   return {
-    needsAttention,
-    rest: orderedReports.filter((report) => !pinnedIds.has(report.id)),
+    reports,
+    remainderCount: orderedReports.length - reports.length,
   };
 }
 

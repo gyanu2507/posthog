@@ -1,11 +1,11 @@
 import {
   buildChannelReportList,
-  type ChannelReportSections,
+  buildSidebarWorkingSet,
   countChannelReportsByStatus,
   type ReportChannelView,
   type ReportStatusCounts,
   type ReportStatusFilter,
-  splitChannelReportSections,
+  type SidebarWorkingSet,
 } from "@posthog/core/inbox/reportChannelScope";
 import {
   buildSuggestedReviewerFilterParam,
@@ -62,12 +62,12 @@ export function useChannelReports(
 ): {
   reports: SignalReport[];
   /**
-   * The list split for the sidebar: a pinned needs-attention digest above the
-   * chronological stream. Only the default browse state splits — a search,
-   * status, or priority filter is already the user choosing what to look at,
-   * so the pin would just reorder what they asked for.
+   * The sidebar's working set: decisions waiting on a person, priority-first,
+   * hard-capped. Null outside the default browse state — a search, status, or
+   * priority filter is already the user choosing what to look at, so the tab
+   * shows the plain filtered list instead.
    */
-  sections: ChannelReportSections;
+  workingSet: SidebarWorkingSet | null;
   isLoading: boolean;
   isError: boolean;
   /** Per-status-bucket counts under the current filters, for the status chips. */
@@ -155,11 +155,8 @@ export function useChannelReports(
     !filters.search.trim() &&
     filters.status === "all" &&
     filters.priorities.length === 0;
-  const sections = useMemo<ChannelReportSections>(
-    () =>
-      defaultBrowse
-        ? splitChannelReportSections(reports)
-        : { needsAttention: [], rest: reports },
+  const workingSet = useMemo<SidebarWorkingSet | null>(
+    () => (defaultBrowse ? buildSidebarWorkingSet(reports) : null),
     [reports, defaultBrowse],
   );
 
@@ -187,7 +184,7 @@ export function useChannelReports(
   const activeQuery = archivedMode ? archivedQuery : query;
   return {
     reports,
-    sections,
+    workingSet,
     statusCounts,
     // The main query excludes archived server-side, so any row means the space
     // has live reports (the tab dot's whole question).

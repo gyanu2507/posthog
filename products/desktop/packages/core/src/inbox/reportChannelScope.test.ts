@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildChannelReportList,
+  buildSidebarWorkingSet,
   channelReportView,
   countChannelReportsByStatus,
   generalReportView,
-  NEEDS_ATTENTION_LIMIT,
-  splitChannelReportSections,
+  SIDEBAR_WORKING_SET_LIMIT,
 } from "./reportChannelScope";
 
 function report(overrides: Partial<SignalReport>): SignalReport {
@@ -166,69 +166,25 @@ describe("reportChannelScope", () => {
   });
 });
 
-describe("splitChannelReportSections", () => {
-  it("pins prioritized actionable reports P0-first, caps the pin, and keeps overflow in the stream", () => {
-    const ordered = [
-      report({
-        id: "new-p3",
-        priority: "P3",
-        updated_at: "2026-06-09T00:00:00Z",
-      }),
-      report({
-        id: "p1-new",
-        priority: "P1",
-        updated_at: "2026-06-08T00:00:00Z",
-      }),
-      report({
-        id: "p2-a",
-        priority: "P2",
-        updated_at: "2026-06-07T00:00:00Z",
-      }),
-      report({ id: "p0", priority: "P0", updated_at: "2026-06-06T00:00:00Z" }),
-      report({
-        id: "p1-old",
-        priority: "P1",
-        updated_at: "2026-06-05T00:00:00Z",
-      }),
-      report({
-        id: "p2-b",
-        priority: "P2",
-        updated_at: "2026-06-04T00:00:00Z",
-      }),
-    ];
-    const { needsAttention, rest } = splitChannelReportSections(ordered);
-    expect(needsAttention.map((r) => r.id)).toEqual([
-      "p0",
-      "p1-new",
-      "p1-old",
-      "p2-a",
-      "p2-b",
+describe("buildSidebarWorkingSet", () => {
+  it("keeps only decisions, priority-first, and counts everything else as remainder", () => {
+    const { reports, remainderCount } = buildSidebarWorkingSet([
+      report({ id: "running", status: "in_progress" }),
+      report({ id: "fyi", status: "ready", actionability: "not_actionable" }),
+      report({ id: "p2", priority: "P2", updated_at: "2026-06-01T00:00:00Z" }),
+      report({ id: "p0", priority: "P0", updated_at: "2026-05-01T00:00:00Z" }),
+      report({ id: "none", updated_at: "2026-06-09T00:00:00Z" }),
     ]);
-    expect(needsAttention).toHaveLength(NEEDS_ATTENTION_LIMIT);
-    // The P3 overflowed the cap and stays in its chronological slot.
-    expect(rest.map((r) => r.id)).toEqual(["new-p3"]);
+    expect(reports.map((r) => r.id)).toEqual(["p0", "p2", "none"]);
+    expect(remainderCount).toBe(2);
   });
 
-  it("never pins reports the agent is still working, nor unprioritized ones", () => {
-    const ordered = [
-      report({ id: "running-p0", status: "in_progress", priority: "P0" }),
-      report({ id: "queued-p0", status: "candidate", priority: "P0" }),
-      report({ id: "no-priority", status: "ready", priority: undefined }),
-      report({ id: "failed-p2", status: "failed", priority: "P2" }),
-      report({
-        id: "pr-p1",
-        status: "in_progress",
-        priority: "P1",
-        implementation_pr_url: "https://gh/pr/1",
-      }),
-    ];
-    const { needsAttention, rest } = splitChannelReportSections(ordered);
-    // A PR to review pins even mid-run; a bare run and a priority-less ready report do not.
-    expect(needsAttention.map((r) => r.id)).toEqual(["pr-p1", "failed-p2"]);
-    expect(rest.map((r) => r.id)).toEqual([
-      "running-p0",
-      "queued-p0",
-      "no-priority",
-    ]);
+  it("caps the set hard and sends the overflow to the remainder", () => {
+    const many = Array.from({ length: SIDEBAR_WORKING_SET_LIMIT + 4 }, (_, i) =>
+      report({ id: `r${i}`, priority: "P2" }),
+    );
+    const { reports, remainderCount } = buildSidebarWorkingSet(many);
+    expect(reports).toHaveLength(SIDEBAR_WORKING_SET_LIMIT);
+    expect(remainderCount).toBe(4);
   });
 });

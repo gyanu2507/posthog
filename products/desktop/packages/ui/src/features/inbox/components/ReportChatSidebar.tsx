@@ -184,16 +184,20 @@ function ReportChatStarter({ report }: { report: SignalReport }) {
     },
   });
 
-  const submit = useCallback(() => {
-    const trimmed = question.trim();
-    if (!trimmed || isDiscussing) return;
-    fireAction("discuss", {
-      has_question: true,
-      question_text: trimmed.slice(0, 500),
-    });
-    setQuestion("");
-    void discussReport(trimmed);
-  }, [question, isDiscussing, discussReport, fireAction]);
+  const ask = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || isDiscussing) return;
+      fireAction("discuss", {
+        has_question: true,
+        question_text: trimmed.slice(0, 500),
+      });
+      setQuestion("");
+      void discussReport(trimmed);
+    },
+    [isDiscussing, discussReport, fireAction],
+  );
+  const submit = useCallback(() => ask(question), [ask, question]);
 
   return (
     <div className="flex h-full flex-col justify-between gap-3 p-3">
@@ -205,6 +209,24 @@ function ReportChatStarter({ report }: { report: SignalReport }) {
           The agent joins with the full report and its evidence already in
           context. Highlight any part of the report to quote it here.
         </span>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {[
+            "What caused this?",
+            "Who is affected?",
+            "Walk me through the fix",
+          ].map((prompt) => (
+            <Button
+              key={prompt}
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isDiscussing}
+              onClick={() => ask(prompt)}
+            >
+              {prompt}
+            </Button>
+          ))}
+        </div>
       </div>
       <form
         className="flex flex-col gap-2"

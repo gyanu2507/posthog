@@ -1,0 +1,359 @@
+import {
+  CaretDownIcon,
+  CrosshairIcon,
+  EnvelopeSimpleIcon,
+  GitPullRequestIcon,
+} from "@phosphor-icons/react";
+import { humanizeIdentifier } from "@posthog/core/inbox/activityLog";
+import { INBOX_DISMISSED_STATUS_FILTER } from "@posthog/core/inbox/reportFiltering";
+import {
+  buildInboxReportSections,
+  type InboxReportSort,
+} from "@posthog/core/inbox/reportInboxSections";
+import { humanizeReportTitle } from "@posthog/core/inbox/reportPresentation";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  Skeleton,
+  Spinner,
+} from "@posthog/quill";
+import type { SignalReport } from "@posthog/shared/types";
+import { InboxScopeSelect } from "@posthog/ui/features/inbox/components/InboxScopeSelect";
+import {
+  KeyCap,
+  ReportTriageFocus,
+} from "@posthog/ui/features/inbox/components/ReportTriageFocus";
+import { SignalReportPriorityBadge } from "@posthog/ui/features/inbox/components/utils/SignalReportPriorityBadge";
+import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
+import { useInboxReportsInfinite } from "@posthog/ui/features/inbox/hooks/useInboxReports";
+import { RelativeTimestamp } from "@posthog/ui/primitives/RelativeTimestamp";
+import { navigateToInboxReportDetail } from "@posthog/ui/router/navigationBridge";
+import { useEffect, useMemo, useState } from "react";
+
+/** Rows shown per section before "Show more" — a scan, not a scroll. */
+const SECTION_PREVIEW_LIMIT = 5;
+
+const SORT_LABELS: Record<InboxReportSort, string> = {
+  evidence: "Most evidence",
+  priority: "Highest priority",
+  newest: "Newest",
+};
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
+}
+
+/**
+ * The global reports inbox: every report in the project on one page,
+ * sectioned by what it asks (a decision, or just watching), quantified by the
+ * evidence behind it, and triageable one at a time in focus mode. The
+ * per-space sidebar list stays the working set; this is everything else.
+ */
+export function ReportsInboxView() {
+  const {
+    scopedReports,
+    allReports,
+    isLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInboxAllReports({ ignoreFilters: true });
+  const [sort, setSort] = useState<InboxReportSort>("evidence");
+  const [focusMode, setFocusMode] = useState(false);
+
+  const sections = useMemo(
+    () => buildInboxReportSections(scopedReports, sort),
+    [scopedReports, sort],
+  );
+
+  // Focus mode from anywhere on the page, matching the button's advertised key.
+  useEffect(() => {
+    if (focusMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "f" && sections.decision.length > 0) {
+        event.preventDefault();
+        setFocusMode(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focusMode, sections.decision.length]);
+
+  if (focusMode) {
+    return (
+      <ReportTriageFocus
+        reports={sections.decision}
+        allReports={allReports}
+        onExit={() => setFocusMode(false)}
+      />
+    );
+  }
+
+  const isEmpty =
+    !isLoading &&
+    sections.decision.length === 0 &&
+    sections.monitoring.length === 0 &&
+    !hasNextPage;
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h1 className="font-semibold text-[15px] text-gray-12">Inbox</h1>
+          <p className="text-[12.5px] text-gray-11">
+            Issues and opportunities found in your product, ready to review
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={sections.decision.length === 0}
+            onClick={() => setFocusMode(true)}
+          >
+            <CrosshairIcon size={13} />
+            Focus mode
+            <KeyCap>F</KeyCap>
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                >
+                  Sort: {SORT_LABELS[sort]}
+                  <CaretDownIcon size={12} />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" side="bottom" sideOffset={6}>
+              {(Object.keys(SORT_LABELS) as InboxReportSort[]).map((key) => (
+                <DropdownMenuItem key={key} onClick={() => setSort(key)}>
+                  {SORT_LABELS[key]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <InboxScopeSelect />
+        </div>
+      </div>
+
+      {isLoading && scopedReports.length === 0 ? (
+        <div aria-hidden className="flex flex-col gap-2 pt-2">
+          {[70, 55, 80, 60].map((width) => (
+            <div key={width} className="flex items-center gap-3 py-2">
+              <Skeleton className="h-4" style={{ width: `${width}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : isEmpty ? (
+        <Empty className="mx-auto max-w-md py-16">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <EnvelopeSimpleIcon size={24} />
+            </EmptyMedia>
+            <EmptyTitle>Nothing to review</EmptyTitle>
+            <EmptyDescription>
+              Reports show up here as your agents find things worth acting on.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <>
+          <InboxSection
+            title="Needs a decision"
+            reports={sections.decision}
+            emptyNote="Nothing waiting on you."
+          />
+          <InboxSection title="Monitoring" reports={sections.monitoring} />
+          <ResolvedSection />
+          {(hasNextPage || isFetchingNextPage) && (
+            <div className="flex justify-center py-2">
+              {isFetchingNextPage ? (
+                <Spinner />
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchNextPage()}
+                >
+                  Load more
+                </Button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// A section header + capped rows. "Needs a decision" renders even when empty
+// (the page's whole question deserves an explicit answer); others only with
+// content.
+function InboxSection({
+  title,
+  reports,
+  emptyNote,
+}: {
+  title: string;
+  reports: SignalReport[];
+  emptyNote?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (reports.length === 0 && !emptyNote) return null;
+  const visible = expanded ? reports : reports.slice(0, SECTION_PREVIEW_LIMIT);
+  const hidden = reports.length - visible.length;
+  return (
+    <section className="flex flex-col gap-1.5">
+      <h2 className="flex items-baseline gap-2 border-(--gray-5) border-b pb-1 font-medium text-[11px] text-gray-10 uppercase tracking-wide">
+        {title}
+        <span className="tabular-nums">({reports.length})</span>
+      </h2>
+      {reports.length === 0 ? (
+        <p className="px-1 py-2 text-[12.5px] text-gray-10">{emptyNote}</p>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {visible.map((report) => (
+            <InboxReportRow key={report.id} report={report} />
+          ))}
+          {hidden > 0 && (
+            <Button
+              type="button"
+              variant="link-muted"
+              size="sm"
+              className="self-center text-gray-10"
+              onClick={() => setExpanded(true)}
+            >
+              Show more ({hidden})
+            </Button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Dense two-line row: what it is, then where it came from; the right edge
+// carries the quantified backing (priority + evidence count).
+function InboxReportRow({ report }: { report: SignalReport }) {
+  const products = (report.source_products ?? [])
+    .map((product) => humanizeIdentifier(product).toLowerCase())
+    .join(" · ");
+  return (
+    <button
+      type="button"
+      onClick={() => navigateToInboxReportDetail(report.id)}
+      className="flex w-full items-center gap-3 rounded-(--radius-2) border border-border bg-(--color-panel-solid) px-3 py-2 text-left transition hover:border-(--gray-6) hover:bg-(--gray-2)"
+    >
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate font-medium text-[13px] text-gray-12">
+            {humanizeReportTitle(report.title, "Untitled report")}
+          </span>
+          {report.implementation_pr_url && (
+            <GitPullRequestIcon
+              size={12}
+              className="shrink-0 text-(--gray-9)"
+              aria-label="Has a pull request"
+            />
+          )}
+        </span>
+        <span className="flex items-center gap-1.5 text-[11.5px] text-gray-10">
+          {products && <span className="truncate">{products}</span>}
+          <RelativeTimestamp
+            timestamp={report.created_at}
+            className="shrink-0 text-[11.5px]"
+          />
+        </span>
+      </div>
+      <span className="flex shrink-0 items-center gap-2">
+        <SignalReportPriorityBadge priority={report.priority} />
+        <span className="font-mono text-[12px] text-gray-11 tabular-nums">
+          {report.signal_count} signal{report.signal_count === 1 ? "" : "s"}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+// Archived and resolved reports come from their own server-side fetch, so the
+// section fetches lazily on first expand and stays collapsed by default.
+function ResolvedSection() {
+  const [expanded, setExpanded] = useState(false);
+  const {
+    allReports,
+    isLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInboxReportsInfinite(
+    { status: INBOX_DISMISSED_STATUS_FILTER, ordering: "-updated_at" },
+    { enabled: expanded, pageSize: 25 },
+  );
+  return (
+    <section className="flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-baseline gap-2 border-(--gray-5) border-b pb-1 text-left font-medium text-[11px] text-gray-10 uppercase tracking-wide"
+      >
+        Resolved
+        <CaretDownIcon
+          size={11}
+          className={expanded ? "rotate-180 self-center" : "self-center"}
+        />
+      </button>
+      {expanded &&
+        (isLoading ? (
+          <div className="flex justify-center py-3">
+            <Spinner />
+          </div>
+        ) : allReports.length === 0 ? (
+          <p className="px-1 py-2 text-[12.5px] text-gray-10">
+            Nothing resolved yet.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {allReports.map((report) => (
+              <InboxReportRow key={report.id} report={report} />
+            ))}
+            {hasNextPage && (
+              <Button
+                type="button"
+                variant="link-muted"
+                size="sm"
+                className="self-center text-gray-10"
+                disabled={isFetchingNextPage}
+                onClick={() => fetchNextPage()}
+              >
+                {isFetchingNextPage ? <Spinner /> : "Show more"}
+              </Button>
+            )}
+          </div>
+        ))}
+    </section>
+  );
+}

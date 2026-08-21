@@ -17,6 +17,7 @@ import {
 } from "@posthog/ui/features/canvas/hooks/useChannelReports";
 import { useOpenInboxReport } from "@posthog/ui/features/inbox/hooks/useOpenInboxReport";
 import { useInView } from "@posthog/ui/primitives/hooks/useInView";
+import { navigateToInbox } from "@posthog/ui/router/navigationBridge";
 import { useEffect, useMemo } from "react";
 
 /**
@@ -40,7 +41,7 @@ export function ChannelReportsSection({
   const openReport = useOpenInboxReport();
   const {
     reports,
-    sections,
+    workingSet,
     isLoading,
     isError,
     fetchNextPage,
@@ -130,11 +131,10 @@ export function ChannelReportsSection({
         </Empty>
       );
     }
-    // In the default browse state the most important actionable reports pin
-    // above a divider (priority-first); the stream below stays chronological.
-    // Any active filter collapses back to one plain list (`needsAttention` is
-    // empty then), so this renders both shapes.
-    const { needsAttention, rest } = sections;
+    // In the default browse state the tab is a working set, not a list of
+    // everything: decisions waiting on a person, priority-first, hard-capped,
+    // with no tail below — the feed and the global inbox carry the rest. Any
+    // active filter (`workingSet` null) shows the plain filtered list.
     const row = (report: SignalReport) => (
       <ReportRow
         key={report.id}
@@ -143,30 +143,38 @@ export function ChannelReportsSection({
         onOpen={openReport}
       />
     );
+    if (workingSet) {
+      return (
+        <div className="flex flex-col gap-px px-2 pt-1 pb-2">
+          {workingSet.reports.length === 0 ? (
+            <p className="px-1.5 py-2 text-[12px] text-gray-10">
+              Nothing needs a decision here.
+            </p>
+          ) : (
+            workingSet.reports.map(row)
+          )}
+          {workingSet.remainderCount > 0 && (
+            <button
+              type="button"
+              onClick={() => navigateToInbox()}
+              className="mt-1 px-1.5 py-1 text-left text-[11.5px] text-gray-10 hover:text-gray-12 hover:underline"
+            >
+              {workingSet.remainderCount} more in the inbox
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col gap-px px-2 pt-1 pb-2">
-        {needsAttention.length > 0 && (
-          <>
-            <div className="px-1.5 pt-1 pb-0.5 font-medium text-[11px] text-(--gray-10)">
-              Needs attention
-            </div>
-            {needsAttention.map(row)}
-            {rest.length > 0 && (
-              <div
-                aria-hidden
-                className="mx-1.5 my-1.5 border-(--gray-5) border-t"
-              />
-            )}
-          </>
-        )}
-        {rest.map(row)}
+        {reports.map(row)}
       </div>
     );
   }, [
     isLoading,
     isError,
     reports,
-    sections,
+    workingSet,
     activeReportId,
     openReport,
     filtersActive,

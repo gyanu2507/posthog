@@ -25,7 +25,11 @@ export function ReportRow({
       <SidebarItem
         depth={0}
         icon={<ReportStateMonogram report={report} />}
-        label={<span className="truncate">{title}</span>}
+        label={
+          <span className="line-clamp-2 whitespace-normal break-words">
+            {title}
+          </span>
+        }
         isActive={isActive}
         onClick={() => onOpen(report.id)}
         endContent={

@@ -6,6 +6,7 @@ import {
 import { useCommandCenterActiveCount } from "@posthog/ui/features/command-center/useCommandCenterActiveCount";
 import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
+import { useReportsInboxEnabled } from "@posthog/ui/features/feature-flags/useReportsInboxEnabled";
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { openSettings } from "@posthog/ui/features/settings/hooks/useOpenSettings";
 import {
@@ -72,6 +73,7 @@ export function SidebarNavSection({
   // With channel reports on, spaces own reports (sidebar tab + feed) and the
   // inbox disappears as a destination.
   const channelReportsEnabled = useChannelReportsEnabled();
+  const reportsInboxEnabled = useReportsInboxEnabled();
   // When this section renders inside the Channels space, the destinations that
   // have a /website mirror stay in that space; everything else (and the whole
   // section in the Code space) uses the canonical routes. Inbox and New task
@@ -138,7 +140,9 @@ export function SidebarNavSection({
     ),
   );
   const navItemAvailable: Record<CustomizableNavItemId, boolean> = {
-    inbox: !channelReportsEnabled,
+    // The global reports inbox reclaims the slot from the channel-reports
+    // takeover; without it, spaces own reports and the entry goes away.
+    inbox: !channelReportsEnabled || reportsInboxEnabled,
     "command-center": true,
     activity: bluebirdEnabled,
     configure: true,

@@ -29,6 +29,7 @@ import {
 import { useCommandCenterActiveCount } from "@posthog/ui/features/command-center/useCommandCenterActiveCount";
 import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
+import { useReportsInboxEnabled } from "@posthog/ui/features/feature-flags/useReportsInboxEnabled";
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { openSettings } from "@posthog/ui/features/settings/hooks/useOpenSettings";
 import { CountBadge } from "@posthog/ui/primitives/CountBadge";
@@ -186,8 +187,11 @@ function ActivityNavItem({
 export function ChannelNav() {
   const view = useAppView();
   const loopsEnabled = useFeatureFlag(LOOPS_FLAG, import.meta.env.DEV);
-  // With channel reports on, spaces own reports and the inbox icon goes away.
+  // With channel reports on, spaces own reports and the inbox icon goes away —
+  // unless the global reports inbox has reclaimed the slot.
   const channelReportsEnabled = useChannelReportsEnabled();
+  const reportsInboxEnabled = useReportsInboxEnabled();
+  const showInbox = !channelReportsEnabled || reportsInboxEnabled;
 
   const { counts } = useInboxAllReports({
     ignoreFilters: true,
@@ -224,7 +228,7 @@ export function ChannelNav() {
           isActive={isHome}
           onClick={withTrack("home", navigateToHome)}
         />
-        {!channelReportsEnabled && (
+        {showInbox && (
           <NavIcon
             icon={
               <EnvelopeSimple size={16} weight={isInbox ? "fill" : "regular"} />
