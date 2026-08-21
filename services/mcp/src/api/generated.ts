@@ -31217,6 +31217,25 @@ export namespace Schemas {
     } as const;
 
     /**
+     * The experiment a scanner watches. Scans derive their person-scoped exposure filter from
+     * this blob at query time, so it is the only place an experiment can enter a scanner's
+     * targeting — which is what lets the write-side access check and read-side redaction cover it.
+     */
+    export interface ScannerExperimentTargeting {
+      /**
+         * The experiment the scanner watches.
+         * @minimum 1
+         */
+      experiment_id: number;
+      /**
+         * Narrow to sessions of people exposed to this variant. Null means every variant.
+         * @maxLength 400
+         * @nullable
+         */
+      variant?: string | null;
+    }
+
+    /**
      * Body of POST /vision/scanners/estimate/ — a proposed, unsaved scanner config.
      */
     export interface EstimateRequest {
@@ -31245,6 +31264,8 @@ export namespace Schemas {
        * * `gemini-3-flash-preview` - Gemini 3 Flash
        * * `gemini-3.7-flash` - Gemini 3.7 Flash */
       model?: ScannerModelEnum;
+      /** Proposed experiment targeting, merged into the query as its exposure filter the same way a saved scanner derives it. The estimate then runs as the requesting user. */
+      experiment_targeting?: ScannerExperimentTargeting | null;
     }
 
     /**
@@ -31480,6 +31501,9 @@ export namespace Schemas {
       readonly provider_key_name: string | null;
     }
 
+    /**
+     * An evaluation that scores LLM generations, traces, or sessions.
+     */
     export interface Evaluation {
       readonly id: string;
       /**
@@ -31536,6 +31560,11 @@ export namespace Schemas {
       readonly created_by: UserBasic | null;
       /** Set to true to soft-delete the evaluation. */
       deleted?: boolean;
+      /**
+         * The effective access level the user has for this object
+         * @nullable
+         */
+      readonly user_access_level: string | null;
     }
 
     /**
@@ -52892,25 +52921,6 @@ export namespace Schemas {
     } as const;
 
     /**
-     * The experiment a scanner's targeting watches. Metadata only; scanning never reads it.
-     */
-    export interface ScannerExperimentTargeting {
-      /**
-         * The experiment the scanner watches.
-         * @minimum 1
-         */
-      experiment_id: number;
-      /**
-         * Targeted experiment variants. Empty means every variant.
-         * @maxItems 50
-         * @items.maxLength 400
-         */
-      variant_keys: string[];
-      /** True when the exposure event is captured server-side and the query filters on the `$feature/<flag_key>` property instead. */
-      use_exposure_fallback: boolean;
-    }
-
-    /**
      * A Replay Vision scanner: its type, targeting query, and AI configuration.
      */
     export interface ReplayScanner {
@@ -59024,6 +59034,9 @@ export namespace Schemas {
       max_age_seconds?: number;
     };
 
+    /**
+     * An evaluation that scores LLM generations, traces, or sessions.
+     */
     export interface PatchedEvaluation {
       readonly id?: string;
       /**
@@ -59080,6 +59093,11 @@ export namespace Schemas {
       readonly created_by?: UserBasic | null;
       /** Set to true to soft-delete the evaluation. */
       deleted?: boolean;
+      /**
+         * The effective access level the user has for this object
+         * @nullable
+         */
+      readonly user_access_level?: string | null;
     }
 
     export interface PatchedEvaluationDirectory {
@@ -80205,6 +80223,8 @@ export namespace Schemas {
          * @nullable
          */
       channel?: string | null;
+      /** Text the server generates the title from instead of `description`. Lets a client whose `description` is only an attachment summary (e.g. pasted text stored as a file) supply the real content for naming, so `description` (the prompt passed to the agent) stays unchanged. Not persisted. */
+      naming_source?: string;
       /**
          * Sandbox environment selected for matching a pre-warmed cloud run. Not persisted on the task.
          * @nullable
