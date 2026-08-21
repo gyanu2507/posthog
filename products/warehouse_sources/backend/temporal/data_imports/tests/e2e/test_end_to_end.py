@@ -418,10 +418,13 @@ async def _run(
         sync_type_config=sync_type_config or {},
     )
 
-    for destination in destinations or []:
-        await sync_to_async(ExternalDataSourceDestination.objects.for_team(team.pk).create)(
+    def _link(destination: "ExternalDataDestination") -> None:
+        ExternalDataSourceDestination.objects.for_team(team.pk).create(
             team_id=team.pk, source=source, destination=destination
         )
+
+    for destination in destinations or []:
+        await sync_to_async(_link)(destination)
 
     workflow_id = str(uuid.uuid4())
     inputs = ExternalDataWorkflowInputs(
@@ -4997,13 +5000,18 @@ async def _postgres_destination(team: Team, postgres_config: dict, connection) -
         },
         sensitive_config={"password": postgres_config["password"]},
     )
-    return await sync_to_async(ExternalDataDestination.objects.for_team(team.pk).create)(
-        team_id=team.pk,
-        type=ExternalDataDestination.Type.POSTGRES,
-        name="customer postgres",
-        integration=integration,
-        config={"database": postgres_config["database"], "schema": DESTINATION_SCHEMA},
-    )
+    def create() -> ExternalDataDestination:
+        # The whole call runs in the thread: `for_team` queries, so building the manager in
+        # the async context would raise SynchronousOnlyOperation before `create` is reached.
+        return ExternalDataDestination.objects.for_team(team.pk).create(
+            team_id=team.pk,
+            type=ExternalDataDestination.Type.POSTGRES,
+            name="customer postgres",
+            integration=integration,
+            config={"database": postgres_config["database"], "schema": DESTINATION_SCHEMA},
+        )
+
+    return await sync_to_async(create)()
 
 
 async def _destination_rows(connection, table: str) -> list[tuple]:
