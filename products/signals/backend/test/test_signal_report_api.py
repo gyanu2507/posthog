@@ -259,7 +259,7 @@ class TestSignalReportListAPI(APIBaseTest):
 
     @parameterized.expand([("unassigned", False), ("assigned", True)])
     def test_retrieve_includes_channel_id(self, _name, assign):
-        from products.tasks.backend.models import Channel  # noqa: PLC0415 — test-only cross-product read
+        from products.tasks.backend.facade.api import Channel  # noqa: PLC0415 — test-only cross-product read, through the facade
 
         channel = Channel.objects.create(team=self.team, name="Reports") if assign else None
         report = self._create_report(channel=channel)
@@ -270,7 +270,7 @@ class TestSignalReportListAPI(APIBaseTest):
         assert response.json()["channel_id"] == (str(channel.id) if channel else None)
 
     def test_filter_by_channel_id_narrows_to_that_space(self):
-        from products.tasks.backend.models import Channel  # noqa: PLC0415 — test-only cross-product read
+        from products.tasks.backend.facade.api import Channel  # noqa: PLC0415 — test-only cross-product read, through the facade
 
         channel = Channel.objects.create(team=self.team, name="Reports")
         in_space = self._create_report(title="In space", channel=channel)
