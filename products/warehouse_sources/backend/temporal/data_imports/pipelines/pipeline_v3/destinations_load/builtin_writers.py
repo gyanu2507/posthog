@@ -25,6 +25,24 @@ SUPPORTED_DESTINATION_TYPES = [
 ]
 
 
+_registered = False
+
+
+def ensure_builtin_destination_writers_registered() -> None:
+    """Register the built-in writers once, on first use.
+
+    Registration used to happen at consumer start. Tying it to a bootstrap step means any
+    other entry point into delivery resolves no writer at all, which fails the batch with
+    "no writer registered" rather than anything that points at the cause. Doing it on demand
+    keeps the vendor drivers off the import path just the same.
+    """
+    global _registered
+    if _registered:
+        return
+    register_builtin_destination_writers()
+    _registered = True
+
+
 def register_builtin_destination_writers() -> None:
     # Imported here, not at module scope: each writer pulls in its vendor driver, and a consumer
     # scoped to one destination type should not pay for the other six.

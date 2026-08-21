@@ -25,6 +25,9 @@ from products.warehouse_sources.backend.temporal.data_imports.destinations.contr
     DestinationRunContext,
 )
 from products.warehouse_sources.backend.temporal.data_imports.destinations.registry import resolve_destination_writer
+from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.builtin_writers import (
+    ensure_builtin_destination_writers_registered,
+)
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.parquet_source import (
     aiter_record_batches,
 )
@@ -155,6 +158,7 @@ def deliver_batch_to_destinations(
         )
 
         try:
+            ensure_builtin_destination_writers_registered()
             writer = resolve_destination_writer(run_ctx)
             async_to_sync(writer.prepare_run)(run_ctx)
             async_to_sync(_write)(writer, export_signal, batch_ctx)
@@ -203,6 +207,7 @@ def abort_destinations(export_signal: ExportSignalMessage) -> None:
     for destination in external_destinations_for(export_signal):
         run_ctx = _run_context(export_signal, destination)
         try:
+            ensure_builtin_destination_writers_registered()
             writer = resolve_destination_writer(run_ctx)
             async_to_sync(writer.abort_run)(run_ctx)
         except Exception as e:
