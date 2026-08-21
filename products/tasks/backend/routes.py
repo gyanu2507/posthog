@@ -4,11 +4,13 @@ import products.tasks.backend.presentation.views.api as tasks
 import products.tasks.backend.presentation.views.loops as loops
 import products.tasks.backend.presentation.views.seat_api as seats
 import products.tasks.backend.presentation.views.channels_api as channels
+import products.tasks.backend.presentation.views.desktop_access as desktop_access
 import products.tasks.backend.presentation.views.task_usage_api as task_usage
 import products.tasks.backend.presentation.views.sandbox_pricing_api as sandbox_pricing
 
 
 def register_routes(routers: RouterRegistry) -> None:
+    routers.projects.register(r"desktop", desktop_access.DesktopAccessViewSet, "project_desktop", ["team_id"])
     project_tasks_router = routers.projects.register(r"tasks", tasks.TaskViewSet, "project_tasks", ["team_id"])
     project_task_runs_router = project_tasks_router.register(
         r"runs", tasks.TaskRunViewSet, "project_task_runs", ["team_id", "task_id"]
