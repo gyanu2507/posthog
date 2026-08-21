@@ -419,7 +419,7 @@ async def _run(
     )
 
     for destination in destinations or []:
-        await sync_to_async(ExternalDataSourceDestination.objects.create)(
+        await sync_to_async(ExternalDataSourceDestination.objects.for_team(team.pk).create)(
             team_id=team.pk, source=source, destination=destination
         )
 
@@ -4997,8 +4997,8 @@ async def _postgres_destination(team: Team, postgres_config: dict, connection) -
         },
         sensitive_config={"password": postgres_config["password"]},
     )
-    return await sync_to_async(ExternalDataDestination.objects.create)(
-        team=team,
+    return await sync_to_async(ExternalDataDestination.objects.for_team(team.pk).create)(
+        team_id=team.pk,
         type=ExternalDataDestination.Type.POSTGRES,
         name="customer postgres",
         integration=integration,
