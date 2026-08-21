@@ -1449,6 +1449,9 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 clearScannerDraft()
             }
             cache.draftTouched = savedAt !== null
+            // Recorded here for the resume toast. By the time the scene unmounts the router already
+            // points at wherever the user navigated, so the step has to be captured while editing.
+            cache.lastEditedStep = scannerEditorSceneLogic.findMounted()?.values.step ?? cache.lastEditedStep
             actions.setScannerDraftSavedAt(savedAt)
         }
         return {
@@ -1671,8 +1674,8 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                     description: goalDraft.description,
                     scanner_type: goalDraft.scanner_type as ScannerType,
                     scanner_config: goalDraft.scanner_config as ScannerConfig,
-                    // The drafted event filter (when the goal mapped to a real event); the triggers step
-                    // shows it for review like any hand-picked filter.
+                    // The drafted session filter (when the goal mapped to real screens or events); the
+                    // triggers step shows it for review like any hand-picked filter.
                     ...(goalDraft.query ? { query: goalDraft.query as RecordingsQuery } : {}),
                 })
                 router.actions.push(urls.replayVisionScannerDetails('new'))
@@ -2117,10 +2120,15 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
 
     beforeUnmount(({ values, props, cache }) => {
         if (props.id === 'new' && cache.draftTouched && values.scannerDraftSavedAt !== null) {
+            // Back to the step the last edit was on, not always the first one — returning to details
+            // after editing recordings or budget reads as having lost those steps, even though the
+            // values were restored. The template step holds no edits, so it falls through to details.
+            const step = cache.lastEditedStep
+            const resumeUrl = scannerStepUrl(step && step !== 'template' ? step : 'details', 'new')
             lemonToast.info('Draft saved', {
                 button: {
                     label: 'Resume',
-                    action: () => router.actions.push(urls.replayVisionScannerDetails('new')),
+                    action: () => router.actions.push(resumeUrl),
                     dataAttr: 'vision-draft-resume-toast',
                 },
             })

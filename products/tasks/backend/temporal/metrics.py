@@ -229,6 +229,17 @@ def increment_credential_refresh(kind: str, outcome: str) -> None:
         pass
 
 
+def increment_pr_babysit_snapshot(outcome: str, *, pr_state: str = "unknown") -> None:
+    try:
+        meter = _metric_meter({"outcome": outcome, "pr_state": pr_state})
+        meter.create_counter(
+            "tasks_pr_babysit_snapshot",
+            "PR babysit snapshot fetches for the PR follow-up loop, by outcome",
+        ).add(1)
+    except Exception:
+        pass
+
+
 def record_sandbox_created(
     runtime: str,
     image_kind: str,
@@ -283,6 +294,31 @@ def record_agent_server_session_init_ms(
             "Latency for get_sandbox_for_repository sub-steps",
             unit="ms",
         ).record(dt.timedelta(milliseconds=session_init_ms))
+    except Exception:
+        pass
+
+
+def increment_agent_server_readiness_retry(
+    attempt: int,
+    outcome: str,
+    *,
+    boot_path: str,
+    origin_product: str | None,
+    runtime: str,
+) -> None:
+    try:
+        _metric_meter(
+            {
+                "attempt": attempt,
+                "outcome": outcome,
+                "boot_path": boot_path,
+                "origin_product": origin_product or "unknown",
+                "runtime": runtime,
+            }
+        ).create_counter(
+            "tasks_process_agent_server_readiness_retry",
+            "Agent-server readiness retries that re-enter the start path",
+        ).add(1)
     except Exception:
         pass
 
