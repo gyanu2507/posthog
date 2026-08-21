@@ -127,6 +127,70 @@ export function buildChannelReportList(
     .sort((a, b) => reportTimestampMs(b) - reportTimestampMs(a));
 }
 
+/**
+ * How many reports the needs-attention section may pin. A digest, not a
+ * re-sort: past a handful the section stops answering "what should I look at
+ * first" and becomes the same wall it was meant to cut through.
+ */
+export const NEEDS_ATTENTION_LIMIT = 5;
+
+const PRIORITY_RANK: Record<SignalReportPriority, number> = {
+  P0: 0,
+  P1: 1,
+  P2: 2,
+  P3: 3,
+  P4: 4,
+};
+
+/**
+ * Whether a report is waiting on a person right now: ready to act on, holding
+ * a PR to review, stuck pending input, or failed and needing a call. Reports
+ * the agent is still working (queued/live runs) never pin — there is nothing
+ * to do about them yet.
+ */
+function reportNeedsPerson(report: SignalReport): boolean {
+  return (
+    !!report.implementation_pr_url ||
+    report.status === "ready" ||
+    report.status === "pending_input" ||
+    report.status === "failed"
+  );
+}
+
+export interface ChannelReportSections {
+  /** Pinned digest: prioritized reports waiting on a person, P0 first. */
+  needsAttention: SignalReport[];
+  /** Everything else, newest-first — the chronological stream. */
+  rest: SignalReport[];
+}
+
+/**
+ * Split an already-built report list into the pinned needs-attention digest
+ * and the chronological rest. Pinning requires a stated priority: the section
+ * promises "most important first", and an unprioritized report has no claim to
+ * that — it stays in the stream. Within the pin, priority outranks recency;
+ * overflow past the cap falls back to the stream in its chronological place.
+ */
+export function splitChannelReportSections(
+  orderedReports: SignalReport[],
+): ChannelReportSections {
+  const needsAttention = orderedReports
+    .filter((report) => reportNeedsPerson(report) && report.priority != null)
+    .sort((a, b) => {
+      const rankDiff =
+        PRIORITY_RANK[a.priority as SignalReportPriority] -
+        PRIORITY_RANK[b.priority as SignalReportPriority];
+      if (rankDiff !== 0) return rankDiff;
+      return reportTimestampMs(b) - reportTimestampMs(a);
+    })
+    .slice(0, NEEDS_ATTENTION_LIMIT);
+  const pinnedIds = new Set(needsAttention.map((report) => report.id));
+  return {
+    needsAttention,
+    rest: orderedReports.filter((report) => !pinnedIds.has(report.id)),
+  };
+}
+
 export type ReportStatusCounts = Record<ReportStatusFilter, number>;
 
 /**

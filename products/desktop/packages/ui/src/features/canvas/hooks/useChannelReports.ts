@@ -1,9 +1,11 @@
 import {
   buildChannelReportList,
+  type ChannelReportSections,
   countChannelReportsByStatus,
   type ReportChannelView,
   type ReportStatusCounts,
   type ReportStatusFilter,
+  splitChannelReportSections,
 } from "@posthog/core/inbox/reportChannelScope";
 import {
   buildSuggestedReviewerFilterParam,
@@ -59,6 +61,13 @@ export function useChannelReports(
   options?: { enabled?: boolean },
 ): {
   reports: SignalReport[];
+  /**
+   * The list split for the sidebar: a pinned needs-attention digest above the
+   * chronological stream. Only the default browse state splits — a search,
+   * status, or priority filter is already the user choosing what to look at,
+   * so the pin would just reorder what they asked for.
+   */
+  sections: ChannelReportSections;
   isLoading: boolean;
   isError: boolean;
   /** Per-status-bucket counts under the current filters, for the status chips. */
@@ -142,6 +151,18 @@ export function useChannelReports(
     [sourceReports, view, filters.search, filters.priorities, filters.status],
   );
 
+  const defaultBrowse =
+    !filters.search.trim() &&
+    filters.status === "all" &&
+    filters.priorities.length === 0;
+  const sections = useMemo<ChannelReportSections>(
+    () =>
+      defaultBrowse
+        ? splitChannelReportSections(reports)
+        : { needsAttention: [], rest: reports },
+    [reports, defaultBrowse],
+  );
+
   const statusCounts = useMemo(() => {
     const counts = countChannelReportsByStatus(query.allReports, {
       view,
@@ -166,6 +187,7 @@ export function useChannelReports(
   const activeQuery = archivedMode ? archivedQuery : query;
   return {
     reports,
+    sections,
     statusCounts,
     // The main query excludes archived server-side, so any row means the space
     // has live reports (the tab dot's whole question).

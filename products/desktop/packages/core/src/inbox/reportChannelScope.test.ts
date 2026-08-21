@@ -6,6 +6,8 @@ import {
   channelReportView,
   countChannelReportsByStatus,
   generalReportView,
+  NEEDS_ATTENTION_LIMIT,
+  splitChannelReportSections,
 } from "./reportChannelScope";
 
 function report(overrides: Partial<SignalReport>): SignalReport {
@@ -161,5 +163,72 @@ describe("reportChannelScope", () => {
       running: 2,
       archived: 0,
     });
+  });
+});
+
+describe("splitChannelReportSections", () => {
+  it("pins prioritized actionable reports P0-first, caps the pin, and keeps overflow in the stream", () => {
+    const ordered = [
+      report({
+        id: "new-p3",
+        priority: "P3",
+        updated_at: "2026-06-09T00:00:00Z",
+      }),
+      report({
+        id: "p1-new",
+        priority: "P1",
+        updated_at: "2026-06-08T00:00:00Z",
+      }),
+      report({
+        id: "p2-a",
+        priority: "P2",
+        updated_at: "2026-06-07T00:00:00Z",
+      }),
+      report({ id: "p0", priority: "P0", updated_at: "2026-06-06T00:00:00Z" }),
+      report({
+        id: "p1-old",
+        priority: "P1",
+        updated_at: "2026-06-05T00:00:00Z",
+      }),
+      report({
+        id: "p2-b",
+        priority: "P2",
+        updated_at: "2026-06-04T00:00:00Z",
+      }),
+    ];
+    const { needsAttention, rest } = splitChannelReportSections(ordered);
+    expect(needsAttention.map((r) => r.id)).toEqual([
+      "p0",
+      "p1-new",
+      "p1-old",
+      "p2-a",
+      "p2-b",
+    ]);
+    expect(needsAttention).toHaveLength(NEEDS_ATTENTION_LIMIT);
+    // The P3 overflowed the cap and stays in its chronological slot.
+    expect(rest.map((r) => r.id)).toEqual(["new-p3"]);
+  });
+
+  it("never pins reports the agent is still working, nor unprioritized ones", () => {
+    const ordered = [
+      report({ id: "running-p0", status: "in_progress", priority: "P0" }),
+      report({ id: "queued-p0", status: "candidate", priority: "P0" }),
+      report({ id: "no-priority", status: "ready", priority: undefined }),
+      report({ id: "failed-p2", status: "failed", priority: "P2" }),
+      report({
+        id: "pr-p1",
+        status: "in_progress",
+        priority: "P1",
+        implementation_pr_url: "https://gh/pr/1",
+      }),
+    ];
+    const { needsAttention, rest } = splitChannelReportSections(ordered);
+    // A PR to review pins even mid-run; a bare run and a priority-less ready report do not.
+    expect(needsAttention.map((r) => r.id)).toEqual(["pr-p1", "failed-p2"]);
+    expect(rest.map((r) => r.id)).toEqual([
+      "running-p0",
+      "queued-p0",
+      "no-priority",
+    ]);
   });
 });
