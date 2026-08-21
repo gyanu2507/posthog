@@ -68,11 +68,6 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.batch_consumer import (
     OwnershipLostError,
 )
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.delivery import (
-    deliver_batch_to_destinations,
-    external_destinations_for,
-    warehouse_is_a_destination,
-)
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.load.idempotency import (
     is_batch_already_processed,
     mark_batch_as_processed,
@@ -768,6 +763,12 @@ def _process_external_destinations_only(
     Same lifecycle as any other run, minus everything Delta-specific. The batch is done when
     every destination has taken it, and the final batch completes the job.
     """
+
+    from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.delivery import (  # noqa: PLC0415
+        deliver_batch_to_destinations,
+        external_destinations_for,
+    )
+
     pending = [
         destination
         for destination in external_destinations_for(export_signal)
@@ -804,6 +805,14 @@ def _process_message_reported(
     # Clear cached S3FileSystem instances to avoid reusing sessions bound to a
     # previously closed event loop (async_to_sync creates/destroys loops).
     s3fs.S3FileSystem.clear_instance_cache()
+
+    # Imported here, not at module scope: `load/__init__` imports this module, and delivery
+    # imports `load.idempotency`, so a module-level import closes the cycle.
+    from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.delivery import (  # noqa: PLC0415
+        deliver_batch_to_destinations,
+        external_destinations_for,
+        warehouse_is_a_destination,
+    )
 
     try:
         team_id_str = str(export_signal.team_id)
