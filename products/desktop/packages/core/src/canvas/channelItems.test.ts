@@ -9,6 +9,7 @@ import {
   DEFAULT_CHANNEL_ITEM_FILTERS,
   filterChannelItems,
   groupChannelItems,
+  sanitizeChannelItemFilters,
   sortChannelItems,
 } from "./channelItems";
 import type { DashboardRecord } from "./dashboardSchemas";
@@ -578,5 +579,32 @@ describe("groupChannelItems", () => {
         "alpha",
       ),
     ).toEqual([[null, "a", "b"]]);
+  });
+});
+
+// A filter set comes back out of storage a build or two later, so a value this
+// one no longer offers has to read as "any": it would otherwise narrow the list
+// with no menu option left to switch it off.
+describe("sanitizeChannelItemFilters", () => {
+  it.each([
+    ["nothing stored", undefined],
+    ["a value the menu dropped", { createdBy: "everyone" }],
+    ["a filter of the wrong type", { pinned: 3 }],
+    ["something that isn't an object", "anyone"],
+  ])("falls back to the defaults for %s", (_case, stored) => {
+    expect(sanitizeChannelItemFilters(stored)).toEqual(
+      DEFAULT_CHANNEL_ITEM_FILTERS,
+    );
+  });
+
+  it("keeps the choices this build still offers", () => {
+    const stored: ChannelItemFilters = {
+      createdBy: "me",
+      attention: "unread",
+      pinned: "pinned",
+      environment: "cloud",
+      source: "slack",
+    };
+    expect(sanitizeChannelItemFilters(stored)).toEqual(stored);
   });
 });

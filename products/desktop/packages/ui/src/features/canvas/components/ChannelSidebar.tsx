@@ -12,9 +12,6 @@ import {
   type ChannelItemSort,
   channelItemSortEvent,
   channelItemSources,
-  DEFAULT_CHANNEL_ITEM_FILTERS,
-  DEFAULT_CHANNEL_ITEM_GROUPING,
-  DEFAULT_CHANNEL_ITEM_SORT,
   filterChannelItems,
   groupChannelItems,
   hasActiveChannelItemFilters,
@@ -54,6 +51,7 @@ import { useChannelItems } from "@posthog/ui/features/canvas/hooks/useChannelIte
 import { useChannels } from "@posthog/ui/features/canvas/hooks/useChannels";
 import { useChannelTasksRunState } from "@posthog/ui/features/canvas/hooks/useChannelTasksRunState";
 import { useLocalDayStart } from "@posthog/ui/features/canvas/hooks/useLocalDayStart";
+import { useChannelItemFilterStore } from "@posthog/ui/features/canvas/stores/channelItemFilterStore";
 import { SHORTCUTS } from "@posthog/ui/features/command/keyboard-shortcuts";
 import { useCommandCenterStore } from "@posthog/ui/features/command-center/commandCenterStore";
 import { placeTaskInCommandCenter } from "@posthog/ui/features/command-center/placeTaskInCommandCenter";
@@ -313,7 +311,8 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
 
   // A space opens on its sessions. The pane stays mounted across a space
   // switch, so the tab is stored against the space it was chosen in rather than
-  // carried into the next one; the filters below deliberately do carry over.
+  // carried into the next one; the filters below deliberately do carry over,
+  // and outlive the session in `channelItemFilterStore`.
   const [chosenTab, setChosenTab] = useState({
     channelId,
     tab: "task" as ChannelTab,
@@ -322,13 +321,13 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
   const setTab = (next: ChannelTab) => setChosenTab({ channelId, tab: next });
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [rawFilters, setFilters] = useState<ChannelItemFilters>(
-    DEFAULT_CHANNEL_ITEM_FILTERS,
-  );
-  const [sort, setSort] = useState<ChannelItemSort>(DEFAULT_CHANNEL_ITEM_SORT);
-  const [rawGrouping, setGrouping] = useState<ChannelItemGrouping>(
-    DEFAULT_CHANNEL_ITEM_GROUPING,
-  );
+  const rawFilters = useChannelItemFilterStore((state) => state.filters);
+  const setFilter = useChannelItemFilterStore((state) => state.setFilter);
+  const clearFilters = useChannelItemFilterStore((state) => state.clearFilters);
+  const sort = useChannelItemFilterStore((state) => state.sort);
+  const setSort = useChannelItemFilterStore((state) => state.setSort);
+  const rawGrouping = useChannelItemFilterStore((state) => state.grouping);
+  const setGrouping = useChannelItemFilterStore((state) => state.setGrouping);
   // Canvases carry no repository, so grouping by one would file the whole tab
   // under a single heading. Neutralised as well as hidden, the way the run
   // filters above are.
@@ -344,7 +343,7 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
     });
   };
   // Every session in #me is yours, so the author filter has nothing to sort by.
-  // The state survives a space switch, so the value is neutralised here as well
+  // The state survives a space switch and a restart, so it is neutralised here as well
   // as hidden — otherwise "Other people" carried in from a shared space would
   // empty this list with no visible control to undo it.
   const { channels } = useChannels();
@@ -747,10 +746,8 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
               // Written against the stored filters, not the narrowed ones the
               // menu displays: a choice made under one tab has to survive a
               // write made under another.
-              onFilterChange={(key, value) =>
-                setFilters((prev) => ({ ...prev, [key]: value }))
-              }
-              onClearFilters={() => setFilters(DEFAULT_CHANNEL_ITEM_FILTERS)}
+              onFilterChange={setFilter}
+              onClearFilters={clearFilters}
               sort={sort}
               onSortChange={setSort}
               grouping={grouping}

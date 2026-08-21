@@ -66,8 +66,24 @@ vi.mock("@posthog/ui/features/canvas/hooks/useChannelTasksRunState", () => ({
   useChannelTasksRunState: () => [],
 }));
 
+import {
+  DEFAULT_CHANNEL_ITEM_FILTERS,
+  DEFAULT_CHANNEL_ITEM_GROUPING,
+  DEFAULT_CHANNEL_ITEM_SORT,
+} from "@posthog/core/canvas/channelItems";
+import { useChannelItemFilterStore } from "@posthog/ui/features/canvas/stores/channelItemFilterStore";
 import { useTaskSelectionStore } from "@posthog/ui/features/sidebar/taskSelectionStore";
 import { ChannelSidebar } from "./ChannelSidebar";
+
+// The list's filters outlive the component they were set from, so a choice made
+// in one test would narrow the next one's list.
+beforeEach(() => {
+  useChannelItemFilterStore.setState({
+    filters: DEFAULT_CHANNEL_ITEM_FILTERS,
+    sort: DEFAULT_CHANNEL_ITEM_SORT,
+    grouping: DEFAULT_CHANNEL_ITEM_GROUPING,
+  });
+});
 
 function item(overrides: Partial<ChannelItemModel> = {}): ChannelItemModel {
   return {
@@ -179,6 +195,30 @@ describe("ChannelSidebar", () => {
 
     expect(screen.queryByText("No matches")).not.toBeInTheDocument();
     expect(screen.queryByText("No sessions yet")).not.toBeInTheDocument();
+  });
+
+  it("has the filter you set last time you were here", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    mocks.items = [item()];
+    const { unmount } = renderSidebar();
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: /Created by/ }),
+    );
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Me" }));
+
+    // Kept per device, so a restart finds the list the way it was left rather
+    // than showing everything again with the funnel button unlit.
+    unmount();
+    expect(
+      JSON.parse(localStorage.getItem("channel-item-filter-storage") ?? "{}")
+        ?.state?.filters?.createdBy,
+    ).toBe("me");
+
+    renderSidebar();
+
+    expect(screen.getByText("No matches")).toBeInTheDocument();
   });
 
   it("gives up a source filter the space you moved to has none of", async () => {

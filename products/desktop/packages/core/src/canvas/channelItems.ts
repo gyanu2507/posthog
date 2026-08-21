@@ -274,6 +274,79 @@ export type ChannelItemGrouping = "date" | "repository";
 /** Days, because when something happened is what a session list is scanned by. */
 export const DEFAULT_CHANNEL_ITEM_GROUPING: ChannelItemGrouping = "date";
 
+const CREATED_BY_VALUES: readonly CreatedByFilter[] = [
+  "anyone",
+  "me",
+  "others",
+];
+const ATTENTION_VALUES: readonly AttentionFilter[] = [
+  "any",
+  "needs_input",
+  "unread",
+];
+const PINNED_VALUES: readonly PinnedFilter[] = ["any", "pinned"];
+const ENVIRONMENT_VALUES: readonly EnvironmentFilter[] = [
+  "any",
+  "local",
+  "cloud",
+];
+const SORT_VALUES: readonly ChannelItemSort[] = ["recent", "created", "alpha"];
+const GROUPING_VALUES: readonly ChannelItemGrouping[] = ["date", "repository"];
+
+function oneOf<T extends string>(
+  values: readonly T[],
+  value: unknown,
+  fallback: T,
+): T {
+  return values.includes(value as T) ? (value as T) : fallback;
+}
+
+/**
+ * A filter set restored from a previous session, taken back to what this build
+ * can answer: a value dropped since it was stored would narrow the list with no
+ * menu option left to undo it.
+ */
+export function sanitizeChannelItemFilters(value: unknown): ChannelItemFilters {
+  const stored = (
+    typeof value === "object" && value !== null ? value : {}
+  ) as Partial<Record<keyof ChannelItemFilters, unknown>>;
+  return {
+    createdBy: oneOf(
+      CREATED_BY_VALUES,
+      stored.createdBy,
+      DEFAULT_CHANNEL_ITEM_FILTERS.createdBy,
+    ),
+    attention: oneOf(
+      ATTENTION_VALUES,
+      stored.attention,
+      DEFAULT_CHANNEL_ITEM_FILTERS.attention,
+    ),
+    pinned: oneOf(
+      PINNED_VALUES,
+      stored.pinned,
+      DEFAULT_CHANNEL_ITEM_FILTERS.pinned,
+    ),
+    environment: oneOf(
+      ENVIRONMENT_VALUES,
+      stored.environment,
+      DEFAULT_CHANNEL_ITEM_FILTERS.environment,
+    ),
+    // A source is an `origin_product` key rather than a closed set, and the
+    // list already neutralises one the current tab holds none of.
+    source: typeof stored.source === "string" ? stored.source : ANY_SOURCE,
+  };
+}
+
+export function sanitizeChannelItemSort(value: unknown): ChannelItemSort {
+  return oneOf(SORT_VALUES, value, DEFAULT_CHANNEL_ITEM_SORT);
+}
+
+export function sanitizeChannelItemGrouping(
+  value: unknown,
+): ChannelItemGrouping {
+  return oneOf(GROUPING_VALUES, value, DEFAULT_CHANNEL_ITEM_GROUPING);
+}
+
 /**
  * Whether the list is narrowed — what lights the filter button up. The search
  * box is excluded: it says so itself, visibly, while a filter left on in a
