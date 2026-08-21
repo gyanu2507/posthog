@@ -1,15 +1,22 @@
 """Delivering a run's batches to a Postgres database.
 
-The shape here is the one every SQL destination follows, so read it before adding Redshift,
-Snowflake, or BigQuery:
+The connection, DDL, introspection and bulk load all come from batch exports'
+`PostgreSQLClient`, which is the same client its Postgres destination runs on. This writer adds
+only what a warehouse sync needs and a batch export does not:
 
 - A full refresh writes into a per-run staging table and swaps it into place on the final
   batch, so the destination table holds the previous run's data right up to the moment the
-  new one is complete. A run that dies half way leaves the live table untouched.
-- An incremental run merges each batch straight into the destination table on the schema's
-  primary keys, which is what makes re-applying a batch after a crash harmless.
-- An append run inserts. Without primary keys there is nothing to merge on, so the apply
-  marker is the only thing standing between a crash and a duplicated batch.
+  new one is complete. A run that dies half way leaves the live table untouched. A batch
+  export commits per interval and has no run that spans many batches.
+- An incremental run merges each batch into the destination table on the schema's primary
+  keys. `amerge_mutable_tables` updates only where a column increases, which suits person
+  tables and not a source table with no monotonic column.
+- Column types come from `sql_types`, not `get_postgres_fields_from_record_schema`. That
+  mapper raises on any type outside the event and person shapes, and a source table may hold
+  dates, decimals, binaries or structs.
+- Schema evolution is additive. Batch exports filter incoming data down to the columns the
+  destination already has, which silently drops new fields, and a synced table is supposed to
+  mirror its source.
 
 Every write is idempotent per batch index, because the consumer re-claims any batch whose
 outcome it could not confirm.
@@ -17,15 +24,19 @@ outcome it could not confirm.
 
 from __future__ import annotations
 
+import io
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import ClassVar
 
-import psycopg
 import pyarrow as pa
+from asgiref.sync import sync_to_async
 from psycopg import sql
 
 from posthog.models.integration.postgres import PostgreSQLServerIntegration
 
+from products.batch_exports.backend.temporal.destinations.postgres_batch_export import Fields, PostgreSQLClient
+from products.batch_exports.backend.temporal.pipeline.transformer import CSVStreamTransformer
 from products.warehouse_sources.backend.temporal.data_imports.destinations.contracts import (
     BatchWriteOutcome,
     DestinationBatchContext,
@@ -33,7 +44,6 @@ from products.warehouse_sources.backend.temporal.data_imports.destinations.contr
 )
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.writers.sql_types import (
     postgres_type_for,
-    quote_identifier,
 )
 
 # Marks which batch of a run wrote a staged row, so re-applying a batch can delete exactly
@@ -47,6 +57,15 @@ def staging_table_name(ctx: DestinationRunContext) -> str:
     return f"{ctx.table_name}__ph_stage_{ctx.run_uuid.replace('-', '')[:12]}"
 
 
+def _load_integration(integration_id: int, team_id: int):
+    from posthog.models.integration import Integration  # noqa: PLC0415 — avoids a model import cycle
+
+    return Integration.objects.get(id=integration_id, team_id=team_id)
+
+
+_aload_integration = sync_to_async(_load_integration, thread_sensitive=False)
+
+
 class PostgresDestinationWriter:
     """Writes a run's batches into a Postgres table."""
 
@@ -56,36 +75,28 @@ class PostgresDestinationWriter:
     def __init__(self, ctx: DestinationRunContext) -> None:
         self._ctx = ctx
         self._schema = (ctx.config or {}).get("schema") or "public"
-        self._conn: psycopg.Connection | None = None
-        self._table_columns: list[tuple[str, str]] = []
+        self._database = (ctx.config or {}).get("database") or "postgres"
 
     # --- connection -------------------------------------------------------------------
 
-    def _connect(self) -> psycopg.Connection:
-        if self._conn is not None and not self._conn.closed:
-            return self._conn
+    def _client_from_integration(self, integration) -> PostgreSQLClient:
+        # `from_inputs` accepts anything exposing credentials/authority/tls, which the
+        # integration wrapper does, so the batch export path and this one resolve credentials
+        # identically.
+        return PostgreSQLClient.from_inputs(PostgreSQLServerIntegration(integration), database=self._database)
 
+    async def _make_client(self) -> PostgreSQLClient:
         if self._ctx.integration_id is None:
             raise ValueError(f"Destination {self._ctx.destination_name} has no integration to connect with")
 
-        from posthog.models.integration import Integration  # noqa: PLC0415 — avoids a model import cycle
+        integration = await _aload_integration(self._ctx.integration_id, self._ctx.team_id)
+        return self._client_from_integration(integration)
 
-        integration = Integration.objects.get(id=self._ctx.integration_id, team_id=self._ctx.team_id)
-        server = PostgreSQLServerIntegration(integration)
-        credentials = server.credentials()
-        authority = server.authority()
-        tls = server.tls()
-
-        self._conn = psycopg.connect(
-            host=authority.host,
-            port=authority.port,
-            user=credentials.user,
-            password=credentials.password,
-            dbname=(self._ctx.config or {}).get("database") or "postgres",
-            sslmode=tls.ssl_mode,
-            autocommit=True,
-        )
-        return self._conn
+    @asynccontextmanager
+    async def _client(self) -> AsyncIterator[PostgreSQLClient]:
+        client = await self._make_client()
+        async with client.connect():
+            yield client
 
     # --- dialect seams ------------------------------------------------------------------
     # Overridden by the SQL destinations that share this writer's shape but not its types.
@@ -97,48 +108,41 @@ class PostgresDestinationWriter:
     def _column_type(self, arrow_type: pa.DataType) -> str:
         return postgres_type_for(arrow_type)
 
+    def _fields_for(self, schema: pa.Schema, *, with_batch_index: bool) -> Fields:
+        fields: list[tuple[str, str]] = [(field.name, self._column_type(field.type)) for field in schema]
+        if with_batch_index:
+            fields.append((self._batch_index_column, "INTEGER"))
+        return fields  # ty: ignore[invalid-return-type]
+
     # --- schema -----------------------------------------------------------------------
 
-    def _ensure_table(self, conn: psycopg.Connection, table: str, schema: pa.Schema, *, with_batch_index: bool) -> None:
-        columns = [(field.name, self._column_type(field.type)) for field in schema]
-        if with_batch_index:
-            columns.append((self._batch_index_column, "INTEGER"))
+    async def _ensure_table(
+        self, client: PostgreSQLClient, table: str, schema: pa.Schema, *, with_batch_index: bool
+    ) -> None:
+        async with client.connection.cursor() as cursor:
+            await cursor.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema)))
 
-        column_sql = sql.SQL(", ").join(
-            sql.SQL("{} {}").format(sql.Identifier(name), sql.SQL(type_name)) for name, type_name in columns
+        await client.acreate_table(
+            self._schema,
+            table,
+            self._fields_for(schema, with_batch_index=with_batch_index),
+            exists_ok=True,
         )
-        conn.execute(
-            sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema)),
-        )
-        conn.execute(
-            sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
-                sql.Identifier(self._schema), sql.Identifier(table), column_sql
-            )
-        )
-        self._table_columns = columns
 
-    def _evolve_table(self, conn: psycopg.Connection, table: str, schema: pa.Schema) -> None:
-        """Add columns the source has grown since the destination table was created.
+    async def _evolve_table(self, client: PostgreSQLClient, table: str, schema: pa.Schema) -> None:
+        """Add columns the source has grown since the destination table was created."""
+        existing = set(await client.aget_table_columns(self._schema, table))
 
-        Deliberately additive. Batch exports filter the incoming data down to the columns the
-        destination already has, which silently drops new fields; a synced table is supposed to
-        mirror its source, so the column is added instead.
-        """
-        existing = {
-            row[0]
-            for row in conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s",
-                (self._schema, table),
-            ).fetchall()
-        }
         for field in schema:
-            if field.name not in existing:
-                conn.execute(
+            if field.name in existing:
+                continue
+            async with client.connection.cursor() as cursor:
+                await cursor.execute(
                     sql.SQL("ALTER TABLE {}.{} ADD COLUMN IF NOT EXISTS {} {}").format(
                         sql.Identifier(self._schema),
                         sql.Identifier(table),
                         sql.Identifier(field.name),
-                        sql.SQL(self._column_type(field.type)),
+                        sql.SQL(self._column_type(field.type)),  # ty: ignore[invalid-argument-type]
                     )
                 )
 
@@ -152,36 +156,46 @@ class PostgresDestinationWriter:
         self, batches: AsyncIterator[pa.RecordBatch], ctx: DestinationBatchContext
     ) -> BatchWriteOutcome:
         run = ctx.run
-        conn = self._connect()
         full_refresh = run.is_full_refresh
         target = staging_table_name(run) if full_refresh else run.table_name
 
         rows_written = 0
-        first = True
-        async for batch in batches:
-            if first:
-                self._ensure_table(conn, target, batch.schema, with_batch_index=full_refresh)
-                self._evolve_table(conn, target, batch.schema)
-                if full_refresh:
-                    # This batch may be a re-apply after a crash, so clear whatever its previous
-                    # attempt wrote before writing it again.
-                    conn.execute(
-                        sql.SQL("DELETE FROM {}.{} WHERE {} = %s").format(
-                            sql.Identifier(self._schema),
-                            sql.Identifier(target),
-                            sql.Identifier(self._batch_index_column),
-                        ),
-                        (ctx.batch_index,),
-                    )
-                first = False
 
-            rows_written += self._write_record_batch(conn, target, batch, ctx, full_refresh=full_refresh)
+        async with self._client() as client:
+            first = True
+            async for batch in batches:
+                if first:
+                    await self._ensure_table(client, target, batch.schema, with_batch_index=full_refresh)
+                    await self._evolve_table(client, target, batch.schema)
+                    if full_refresh:
+                        # This batch may be a re-apply after a crash, so clear whatever its
+                        # previous attempt wrote before writing it again.
+                        await self._delete_batch_rows(client, target, ctx.batch_index)
+                    first = False
+
+                rows_written += await self._write_record_batch(client, target, batch, ctx, full_refresh=full_refresh)
 
         return BatchWriteOutcome(rows_written=rows_written)
 
-    def _write_record_batch(
+    async def _delete_batch_rows(self, client: PostgreSQLClient, target: str, batch_index: int) -> None:
+        async with client.connection.cursor() as cursor:
+            await cursor.execute(
+                sql.SQL("DELETE FROM {}.{} WHERE {} = %s").format(
+                    sql.Identifier(self._schema),
+                    sql.Identifier(target),
+                    sql.Identifier(self._batch_index_column),
+                ),
+                (batch_index,),
+            )
+
+    def _tsv_buffer(self, batch: pa.RecordBatch, column_names: list[str]) -> io.BytesIO:
+        """Render a record batch as TSV, using the same transformer the batch export uses."""
+        transformer = CSVStreamTransformer(field_names=column_names, delimiter="\t")
+        return io.BytesIO(transformer.write_record_batch(batch))
+
+    async def _write_record_batch(
         self,
-        conn: psycopg.Connection,
+        client: PostgreSQLClient,
         target: str,
         batch: pa.RecordBatch,
         ctx: DestinationBatchContext,
@@ -189,150 +203,135 @@ class PostgresDestinationWriter:
         full_refresh: bool,
     ) -> int:
         run = ctx.run
-        column_names = list(batch.schema.names)
-        rows = batch.to_pylist()
-        if not rows:
+        if batch.num_rows == 0:
             return 0
 
+        column_names = list(batch.schema.names)
+
         if full_refresh:
-            self._copy_rows(conn, target, column_names, rows, batch_index=ctx.batch_index)
-            return len(rows)
+            stamped = batch.append_column(
+                self._batch_index_column,
+                pa.array([ctx.batch_index] * batch.num_rows, type=pa.int32()),
+            )
+            await client.copy_tsv_to_postgres(
+                self._tsv_buffer(stamped, [*column_names, self._batch_index_column]),
+                self._schema,
+                target,
+                [*column_names, self._batch_index_column],
+            )
+            return batch.num_rows
 
         if run.is_incremental and run.primary_keys:
-            self._merge_rows(conn, target, column_names, rows, primary_keys=list(run.primary_keys))
-        else:
-            self._copy_rows(conn, target, column_names, rows, batch_index=None)
-        return len(rows)
+            return await self._merge_batch(client, target, batch, column_names)
 
-    def _copy_rows(
-        self,
-        conn: psycopg.Connection,
-        target: str,
-        column_names: list[str],
-        rows: list[dict],
-        *,
-        batch_index: int | None,
-    ) -> None:
-        columns = [*column_names] + ([self._batch_index_column] if batch_index is not None else [])
-        statement = sql.SQL("COPY {}.{} ({}) FROM STDIN").format(
-            sql.Identifier(self._schema),
-            sql.Identifier(target),
-            sql.SQL(", ").join(sql.Identifier(c) for c in columns),
-        )
-        with conn.cursor().copy(statement) as copy:
-            for row in rows:
-                values = [row.get(name) for name in column_names]
-                if batch_index is not None:
-                    values.append(batch_index)
-                copy.write_row(values)
+        await client.copy_tsv_to_postgres(self._tsv_buffer(batch, column_names), self._schema, target, column_names)
+        return batch.num_rows
 
-    def _merge_rows(
+    async def _merge_batch(
+        self, client: PostgreSQLClient, target: str, batch: pa.RecordBatch, column_names: list[str]
+    ) -> int:
+        """Upsert a batch on the schema's primary keys, through a short-lived stage table."""
+        run = self._ctx
+        stage = f"{target}__ph_merge_{run.run_uuid.replace('-', '')[:8]}"
+
+        async with client.managed_table(
+            self._schema, stage, self._fields_for(batch.schema, with_batch_index=False), delete=True
+        ):
+            await client.copy_tsv_to_postgres(self._tsv_buffer(batch, column_names), self._schema, stage, column_names)
+            await self._upsert_from_stage(client, target, stage, column_names, list(run.primary_keys))
+
+        return batch.num_rows
+
+    async def _upsert_from_stage(
         self,
-        conn: psycopg.Connection,
+        client: PostgreSQLClient,
         target: str,
+        stage: str,
         column_names: list[str],
-        rows: list[dict],
-        *,
         primary_keys: list[str],
     ) -> None:
-        """Upsert on the schema's primary keys, so re-applying a batch is a no-op."""
-        updatable = [c for c in column_names if c not in primary_keys]
-        insert = sql.SQL("INSERT INTO {}.{} ({}) VALUES ({}) ON CONFLICT ({}) DO {}").format(
-            sql.Identifier(self._schema),
-            sql.Identifier(target),
-            sql.SQL(", ").join(sql.Identifier(c) for c in column_names),
-            sql.SQL(", ").join(sql.Placeholder() for _ in column_names),
-            sql.SQL(", ").join(sql.Identifier(c) for c in primary_keys),
-            sql.SQL("UPDATE SET {}").format(
-                sql.SQL(", ").join(
-                    sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in updatable
+        await self._ensure_unique_index(client, target, primary_keys)
+
+        updates = [c for c in column_names if c not in primary_keys]
+        set_clause = sql.SQL(", ").join(
+            sql.SQL("{col} = EXCLUDED.{col}").format(col=sql.Identifier(c)) for c in updates
+        )
+        columns = sql.SQL(", ").join(sql.Identifier(c) for c in column_names)
+        conflict = sql.SQL(", ").join(sql.Identifier(c) for c in primary_keys)
+
+        statement = sql.SQL(
+            "INSERT INTO {schema}.{target} ({columns}) SELECT {columns} FROM {schema}.{stage} "
+            "ON CONFLICT ({conflict}) DO {action}"
+        ).format(
+            schema=sql.Identifier(self._schema),
+            target=sql.Identifier(target),
+            stage=sql.Identifier(stage),
+            columns=columns,
+            conflict=conflict,
+            action=sql.SQL("UPDATE SET {}").format(set_clause) if updates else sql.SQL("NOTHING"),
+        )
+        async with client.connection.cursor() as cursor:
+            await cursor.execute(statement)
+
+    async def _ensure_unique_index(self, client: PostgreSQLClient, target: str, primary_keys: list[str]) -> None:
+        """ON CONFLICT needs a unique constraint on the merge keys."""
+        index_name = f"{target}__ph_pk"
+        async with client.connection.cursor() as cursor:
+            await cursor.execute(
+                sql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+                    sql.Identifier(index_name),
+                    sql.Identifier(self._schema),
+                    sql.Identifier(target),
+                    sql.SQL(", ").join(sql.Identifier(c) for c in primary_keys),
                 )
             )
-            if updatable
-            else sql.SQL("NOTHING"),
-        )
-        self._ensure_unique_index(conn, target, primary_keys)
-        with conn.cursor() as cursor:
-            cursor.executemany(insert, [[row.get(name) for name in column_names] for row in rows])
-
-    def _ensure_unique_index(self, conn: psycopg.Connection, target: str, primary_keys: list[str]) -> None:
-        """ON CONFLICT needs a unique index on the merge keys; create it once."""
-        index_name = f"{target}__ph_pk"[:63]
-        conn.execute(
-            sql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
-                sql.Identifier(index_name),
-                sql.Identifier(self._schema),
-                sql.Identifier(target),
-                sql.SQL(", ").join(sql.Identifier(c) for c in primary_keys),
-            )
-        )
 
     async def finalize_run(self, ctx: DestinationRunContext) -> None:
-        """Swap a completed full refresh into place. Other sync types wrote in place already.
-
-        Idempotent: the consumer re-claims a final batch whose outcome it could not confirm, so
-        this can be called again after the swap already happened. A missing staging table is
-        exactly that case, and means the run is already live.
-        """
+        """Publish a full refresh by swapping the staging table into place."""
         if not ctx.is_full_refresh:
             return
 
-        conn = self._connect()
         staging = staging_table_name(ctx)
-        live = ctx.table_name
-        old = f"{live}__ph_old_{ctx.run_uuid.replace('-', '')[:12]}"
 
-        staging_exists = conn.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
-            (self._schema, staging),
-        ).fetchone()
-        if not staging_exists:
-            return
+        async with self._client() as client:
+            if not await self._table_exists(client, staging):
+                # Already swapped by an earlier attempt at this same final batch.
+                return
 
-        with conn.transaction():
-            conn.execute(
-                sql.SQL("ALTER TABLE {}.{} DROP COLUMN IF EXISTS {}").format(
-                    sql.Identifier(self._schema), sql.Identifier(staging), sql.Identifier(self._batch_index_column)
-                )
-            )
-            live_exists = conn.execute(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
-                (self._schema, live),
-            ).fetchone()
-            if live_exists:
-                conn.execute(
-                    sql.SQL("ALTER TABLE {}.{} RENAME TO {}").format(
-                        sql.Identifier(self._schema), sql.Identifier(live), sql.Identifier(old)
+            async with client.connection.cursor() as cursor:
+                await cursor.execute(
+                    sql.SQL("ALTER TABLE {}.{} DROP COLUMN IF EXISTS {}").format(
+                        sql.Identifier(self._schema),
+                        sql.Identifier(staging),
+                        sql.Identifier(self._batch_index_column),
                     )
                 )
-            conn.execute(
-                sql.SQL("ALTER TABLE {}.{} RENAME TO {}").format(
-                    sql.Identifier(self._schema), sql.Identifier(staging), sql.Identifier(live)
-                )
+
+            async with client.connection.transaction():
+                async with client.connection.cursor() as cursor:
+                    await cursor.execute("SET TRANSACTION READ WRITE")
+                    await cursor.execute(
+                        sql.SQL("DROP TABLE IF EXISTS {}.{}").format(
+                            sql.Identifier(self._schema), sql.Identifier(ctx.table_name)
+                        )
+                    )
+                    await cursor.execute(
+                        sql.SQL("ALTER TABLE {}.{} RENAME TO {}").format(
+                            sql.Identifier(self._schema),
+                            sql.Identifier(staging),
+                            sql.Identifier(ctx.table_name),
+                        )
+                    )
+
+    async def _table_exists(self, client: PostgreSQLClient, table: str) -> bool:
+        async with client.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+                (self._schema, table),
             )
-        if live_exists:
-            conn.execute(
-                sql.SQL("DROP TABLE IF EXISTS {}.{}").format(sql.Identifier(self._schema), sql.Identifier(old))
-            )
+            return await cursor.fetchone() is not None
 
     async def abort_run(self, ctx: DestinationRunContext) -> None:
-        """Drop the staging table a failed full refresh left behind. Best effort."""
-        if not ctx.is_full_refresh or self._conn is None or self._conn.closed:
-            return
-        try:
-            self._conn.execute(
-                sql.SQL("DROP TABLE IF EXISTS {}.{}").format(
-                    sql.Identifier(self._schema), sql.Identifier(staging_table_name(ctx))
-                )
-            )
-        except Exception:
-            # The next run of this table creates its own staging table, so a leftover one costs
-            # storage rather than correctness.
-            pass
-
-    def close(self) -> None:
-        if self._conn is not None and not self._conn.closed:
-            self._conn.close()
-
-
-__all__ = ["BATCH_INDEX_COLUMN", "PostgresDestinationWriter", "quote_identifier", "staging_table_name"]
+        """Drop whatever a run that will not finish left staged."""
+        async with self._client() as client:
+            await client.adelete_table(self._schema, staging_table_name(ctx), not_found_ok=True)

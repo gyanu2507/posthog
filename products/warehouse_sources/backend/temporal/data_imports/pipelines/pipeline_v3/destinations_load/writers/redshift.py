@@ -1,17 +1,22 @@
 """Delivering a run's batches to Redshift.
 
-Redshift speaks the Postgres wire protocol, so the connection and the full-refresh swap are
-shared with the Postgres writer, and a Redshift destination is backed by a `postgresql`
-integration. (The `aws-redshift` integration kind holds AWS keys for COPY-from-S3, not the
-cluster's host and login, so it cannot back the connection.) Three things genuinely differ and
-are overridden here:
+Redshift speaks the Postgres wire protocol, so this builds on the Postgres writer and on batch
+exports' `RedshiftClient`, which is itself a `PostgreSQLClient`. A Redshift destination is
+backed by a `postgresql` integration, because the `aws-redshift` integration kind holds AWS
+keys rather than the cluster's host and login.
 
-- No `ON CONFLICT`. Upserts are a staging table plus a delete-then-insert inside one
-  transaction, which is the portable form and works on clusters predating Redshift's `MERGE`.
-- No unbounded `TEXT`. Columns are `VARCHAR(MAX)`, and nested values go in `SUPER` rather than
-  `JSONB`.
-- No `CREATE UNIQUE INDEX`. Redshift has no unique indexes to create, so the Postgres writer's
-  index step is skipped entirely.
+Three things genuinely differ and are overridden here:
+
+- No `COPY ... FROM STDIN`. Rows are inserted through a client cursor instead.
+- No unbounded `TEXT`. Columns are `VARCHAR(MAX)`, and nested values go in `SUPER`.
+- No unique indexes. Upserts are a delete followed by an insert inside one transaction, which
+  is the portable form and works on clusters predating Redshift's `MERGE`.
+
+`RedshiftClient.acopy_from_s3_bucket` would be the fast path, since a run's batches are
+already parquet in S3. It is not usable as-is: it needs a MANIFEST file and an IAM role or AWS
+credentials that let the customer's cluster read the bucket the parquet sits in, which is a
+PostHog bucket. Batch exports solve that by staging into a customer-owned bucket first. Wiring
+that up here is follow-up work, and it is what the `aws-redshift` integration kind is for.
 """
 
 from __future__ import annotations
@@ -19,10 +24,13 @@ from __future__ import annotations
 import json
 from typing import ClassVar
 
-import psycopg
 import pyarrow as pa
 from psycopg import sql
 
+from posthog.models.integration.postgres import PostgreSQLServerIntegration
+
+from products.batch_exports.backend.temporal.destinations.postgres_batch_export import PostgreSQLClient
+from products.batch_exports.backend.temporal.destinations.redshift_batch_export import RedshiftClient
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.writers.postgres import (
     PostgresDestinationWriter,
 )
@@ -79,61 +87,57 @@ class RedshiftDestinationWriter(PostgresDestinationWriter):
     holds_sync_lock: ClassVar[bool] = False
     runs_post_load: ClassVar[bool] = False
 
+    def _client_from_integration(self, integration) -> PostgreSQLClient:
+        return RedshiftClient.from_inputs(PostgreSQLServerIntegration(integration), database=self._database)
+
     def _column_type(self, arrow_type: pa.DataType) -> str:
         return redshift_type_for(arrow_type)
 
-    def _ensure_unique_index(self, conn: psycopg.Connection, target: str, primary_keys: list[str]) -> None:
-        # Redshift has no unique indexes; uniqueness is enforced by the delete-then-insert below.
+    async def _ensure_unique_index(self, client: PostgreSQLClient, target: str, primary_keys: list[str]) -> None:
+        # Redshift has no unique indexes; uniqueness comes from the delete-then-insert below.
         return None
 
-    def _merge_rows(
+    async def _write_record_batch(
         self,
-        conn: psycopg.Connection,
+        client: PostgreSQLClient,
         target: str,
-        column_names: list[str],
-        rows: list[dict],
+        batch: pa.RecordBatch,
+        ctx,
         *,
-        primary_keys: list[str],
-    ) -> None:
-        """Upsert by deleting the incoming keys and inserting the batch, in one transaction.
+        full_refresh: bool,
+    ) -> int:
+        """Insert rather than COPY FROM STDIN, which Redshift does not support."""
+        run = ctx.run
+        if batch.num_rows == 0:
+            return 0
 
-        Both halves run together so a reader never sees the deleted rows missing, and so a
-        re-applied batch converges on the same result.
-        """
-        with conn.transaction():
-            key_tuples = [tuple(row.get(key) for key in primary_keys) for row in rows]
-            delete = sql.SQL("DELETE FROM {}.{} WHERE ({}) IN ({})").format(
-                sql.Identifier(self._schema),
-                sql.Identifier(target),
-                sql.SQL(", ").join(sql.Identifier(key) for key in primary_keys),
-                sql.SQL(", ").join(
-                    sql.SQL("({})").format(sql.SQL(", ").join(sql.Placeholder() for _ in primary_keys))
-                    for _ in key_tuples
-                ),
-            )
-            conn.execute(delete, [value for key_tuple in key_tuples for value in key_tuple])
+        column_names = list(batch.schema.names)
+        rows = batch.to_pylist()
 
-            insert = sql.SQL("INSERT INTO {}.{} ({}) VALUES ({})").format(
-                sql.Identifier(self._schema),
-                sql.Identifier(target),
-                sql.SQL(", ").join(sql.Identifier(c) for c in column_names),
-                sql.SQL(", ").join(sql.Placeholder() for _ in column_names),
-            )
-            with conn.cursor() as cursor:
-                cursor.executemany(insert, [[_encode(row.get(name)) for name in column_names] for row in rows])
+        if run.is_incremental and run.primary_keys and not full_refresh:
+            await self._delete_then_insert(client, target, column_names, rows, list(run.primary_keys))
+            return len(rows)
 
-    def _copy_rows(
+        await self._insert(
+            client,
+            target,
+            column_names,
+            rows,
+            batch_index=ctx.batch_index if full_refresh else None,
+        )
+        return len(rows)
+
+    async def _insert(
         self,
-        conn: psycopg.Connection,
+        client: PostgreSQLClient,
         target: str,
         column_names: list[str],
         rows: list[dict],
         *,
         batch_index: int | None,
     ) -> None:
-        """Insert rather than COPY FROM STDIN, which Redshift does not support."""
         columns = [*column_names] + ([self._batch_index_column] if batch_index is not None else [])
-        insert = sql.SQL("INSERT INTO {}.{} ({}) VALUES ({})").format(
+        statement = sql.SQL("INSERT INTO {}.{} ({}) VALUES ({})").format(
             sql.Identifier(self._schema),
             sql.Identifier(target),
             sql.SQL(", ").join(sql.Identifier(c) for c in columns),
@@ -145,8 +149,39 @@ class RedshiftDestinationWriter(PostgresDestinationWriter):
             if batch_index is not None:
                 values.append(batch_index)
             payload.append(values)
-        with conn.cursor() as cursor:
-            cursor.executemany(insert, payload)
+
+        async with client.connection.cursor() as cursor:
+            await cursor.executemany(statement, payload)
+
+    async def _delete_then_insert(
+        self,
+        client: PostgreSQLClient,
+        target: str,
+        column_names: list[str],
+        rows: list[dict],
+        primary_keys: list[str],
+    ) -> None:
+        """Upsert by deleting the incoming keys and inserting the batch, in one transaction.
+
+        Both halves run together so a reader never sees the deleted rows missing, and so a
+        re-applied batch converges on the same result.
+        """
+        key_tuples = [tuple(row.get(key) for key in primary_keys) for row in rows]
+
+        async with client.connection.transaction():
+            delete = sql.SQL("DELETE FROM {}.{} WHERE ({}) IN ({})").format(
+                sql.Identifier(self._schema),
+                sql.Identifier(target),
+                sql.SQL(", ").join(sql.Identifier(key) for key in primary_keys),
+                sql.SQL(", ").join(
+                    sql.SQL("({})").format(sql.SQL(", ").join(sql.Placeholder() for _ in primary_keys))
+                    for _ in key_tuples
+                ),
+            )
+            async with client.connection.cursor() as cursor:
+                await cursor.execute(delete, [value for key_tuple in key_tuples for value in key_tuple])
+
+            await self._insert(client, target, column_names, rows, batch_index=None)
 
 
 def _encode(value):

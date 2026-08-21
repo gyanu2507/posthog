@@ -7,7 +7,9 @@ from django.conf import settings
 
 import psycopg
 import pyarrow as pa
+import psycopg.conninfo
 
+from products.batch_exports.backend.temporal.destinations.postgres_batch_export import PostgreSQLClient
 from products.warehouse_sources.backend.temporal.data_imports.destinations.contracts import (
     DestinationBatchContext,
     DestinationRunContext,
@@ -36,11 +38,16 @@ class LocalPostgresWriter(PostgresDestinationWriter):
         super().__init__(ctx)
         self._dsn = dsn
 
-    def _connect(self) -> psycopg.Connection:
-        if self._conn is not None and not self._conn.closed:
-            return self._conn
-        self._conn = psycopg.connect(self._dsn, autocommit=True)
-        return self._conn
+    async def _make_client(self) -> PostgreSQLClient:
+        parsed = psycopg.conninfo.conninfo_to_dict(self._dsn)
+        return PostgreSQLClient(
+            user=str(parsed.get("user", "posthog")),
+            password=str(parsed.get("password", "posthog")),
+            host=str(parsed.get("host", "localhost")),
+            port=int(parsed.get("port", 5432)),
+            database=str(parsed.get("dbname", "posthog")),
+            ssl_mode="prefer",
+        )
 
 
 @pytest.fixture
@@ -108,7 +115,6 @@ class TestFullRefresh:
 
             assert _read(dsn, table_name) == [(1, "a"), (2, "b")]
         finally:
-            writer.close()
             _drop(dsn, table_name, staging_table_name(ctx))
 
     async def test_reapplying_a_batch_does_not_duplicate_its_rows(self, dsn, table_name) -> None:
@@ -123,7 +129,6 @@ class TestFullRefresh:
 
             assert _read(dsn, table_name) == [(1, "a"), (2, "b")]
         finally:
-            writer.close()
             _drop(dsn, table_name, staging_table_name(ctx))
 
     async def test_finalizing_twice_leaves_the_swapped_table_alone(self, dsn, table_name) -> None:
@@ -141,7 +146,6 @@ class TestFullRefresh:
 
             assert _read(dsn, table_name) == [(1, "a")]
         finally:
-            writer.close()
             _drop(dsn, table_name, staging_table_name(ctx))
 
     async def test_a_run_that_never_finishes_leaves_the_previous_data_in_place(self, dsn, table_name) -> None:
@@ -165,8 +169,6 @@ class TestFullRefresh:
 
             assert _read(dsn, table_name) == [(1, "old")]
         finally:
-            first_writer.close()
-            second_writer.close()
             _drop(dsn, table_name, staging_table_name(first), staging_table_name(second))
 
 
@@ -187,7 +189,6 @@ class TestIncremental:
 
             assert _read(dsn, table_name) == [(1, "updated"), (2, "second")]
         finally:
-            writer.close()
             _drop(dsn, table_name)
 
     async def test_reapplying_a_batch_is_harmless(self, dsn, table_name) -> None:
@@ -200,7 +201,6 @@ class TestIncremental:
 
             assert _read(dsn, table_name) == [(1, "a")]
         finally:
-            writer.close()
             _drop(dsn, table_name)
 
     async def test_a_new_source_column_is_added_rather_than_dropped(self, dsn, table_name) -> None:
@@ -221,5 +221,4 @@ class TestIncremental:
                 rows = conn.execute(f'SELECT id, extra FROM public."{table_name}" ORDER BY id').fetchall()
             assert rows == [(1, None), (2, "kept")]
         finally:
-            writer.close()
             _drop(dsn, table_name)
