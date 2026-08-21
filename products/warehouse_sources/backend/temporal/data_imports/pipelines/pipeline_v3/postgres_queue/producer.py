@@ -17,6 +17,11 @@ import structlog
 from structlog.types import FilteringBoundLogger
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.messages import SyncTypeLiteral
+from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.postgres_queue.destination_queue import (
+    RunDestination,
+    insert_batch_destinations,
+    insert_run_destinations,
+)
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.postgres_queue.jobs_db import (
     BATCH_TABLE,
     BatchQueue,
@@ -72,6 +77,7 @@ class PostgresProducer:
         cdc_table_mode: str | None = None,
         workflow_id: str | None = None,
         workflow_run_id: str | None = None,
+        destinations: list[RunDestination] | None = None,
     ) -> None:
         self._team_id = team_id
         self._job_id = job_id
@@ -93,6 +99,7 @@ class PostgresProducer:
         self._cdc_table_mode = cdc_table_mode
         self._workflow_id = workflow_id
         self._workflow_run_id = workflow_run_id
+        self._destinations: list[RunDestination] = list(destinations or [])
 
         self._conn = _connect_with_retry(database_url)
         self._batches_sent = 0
@@ -160,8 +167,22 @@ class PostgresProducer:
             if superseded > 0:
                 self._logger.info("superseded_old_run_batches", count=superseded)
 
-        self._conn.execute(
-            f"""
+        if batch_result.batch_index == 0 and self._destinations:
+            insert_run_destinations(
+                self._conn,
+                team_id=self._team_id,
+                schema_id=self._schema_id,
+                source_id=self._source_id,
+                job_id=self._job_id,
+                run_uuid=self._run_uuid,
+                destinations=self._destinations,
+            )
+
+        # One transaction: a batch row with no work items behind it would be delivered
+        # nowhere and never retried, because nothing is left for a consumer to claim.
+        with self._conn.transaction():
+            batch_row = self._conn.execute(
+                f"""
             INSERT INTO {BATCH_TABLE} (
                 team_id, schema_id, source_id, job_id, run_uuid,
                 batch_index, s3_path, row_count, byte_size, is_final_batch,
@@ -173,28 +194,43 @@ class PostgresProducer:
                 %(total_batches)s, %(total_rows)s, %(sync_type)s, %(cumulative_row_count)s,
                 %(resource_name)s, %(is_resume)s, %(is_first_ever_sync)s, %(metadata)s, now()
             )
+            RETURNING id
             """,
-            {
-                "team_id": self._team_id,
-                "schema_id": self._schema_id,
-                "source_id": self._source_id,
-                "job_id": self._job_id,
-                "run_uuid": self._run_uuid,
-                "batch_index": batch_result.batch_index,
-                "s3_path": batch_result.s3_path,
-                "row_count": batch_result.row_count,
-                "byte_size": batch_result.byte_size,
-                "is_final_batch": is_final_batch,
-                "total_batches": total_batches,
-                "total_rows": total_rows,
-                "sync_type": self._sync_type,
-                "cumulative_row_count": cumulative_row_count,
-                "resource_name": self._resource_name,
-                "is_resume": self._is_resume,
-                "is_first_ever_sync": self._is_first_ever_sync,
-                "metadata": json.dumps(metadata),
-            },
-        )
+                {
+                    "team_id": self._team_id,
+                    "schema_id": self._schema_id,
+                    "source_id": self._source_id,
+                    "job_id": self._job_id,
+                    "run_uuid": self._run_uuid,
+                    "batch_index": batch_result.batch_index,
+                    "s3_path": batch_result.s3_path,
+                    "row_count": batch_result.row_count,
+                    "byte_size": batch_result.byte_size,
+                    "is_final_batch": is_final_batch,
+                    "total_batches": total_batches,
+                    "total_rows": total_rows,
+                    "sync_type": self._sync_type,
+                    "cumulative_row_count": cumulative_row_count,
+                    "resource_name": self._resource_name,
+                    "is_resume": self._is_resume,
+                    "is_first_ever_sync": self._is_first_ever_sync,
+                    "metadata": json.dumps(metadata),
+                },
+            ).fetchone()
+
+            if self._destinations:
+                assert batch_row is not None
+                insert_batch_destinations(
+                    self._conn,
+                    batch_id=str(batch_row[0]),
+                    team_id=self._team_id,
+                    schema_id=self._schema_id,
+                    run_uuid=self._run_uuid,
+                    batch_index=batch_result.batch_index,
+                    is_final_batch=is_final_batch,
+                    sync_type=self._sync_type,
+                    destinations=self._destinations,
+                )
 
         self._batches_sent += 1
         if is_final_batch:

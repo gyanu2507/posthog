@@ -57917,6 +57917,14 @@ export namespace Schemas {
       operations?: DesignOperation[];
     }
 
+    export interface PatchedDestinationLink {
+      /**
+         * Destinations to sync to. On a table, null clears the override so the table follows its source again.
+         * @nullable
+         */
+      destination_ids?: string[] | null;
+    }
+
     export interface PatchedDigestChannel {
       readonly id?: string;
       /** Opaque digest bucket this channel receives, e.g. 'repo:PostHog/posthog'. Immutable after creation — it anchors the audience and its opt-out tombstone. */
@@ -72117,6 +72125,21 @@ export namespace Schemas {
       by_type: ScannerStatsByType;
     }
 
+    /**
+     * Response shape for a table's destination override.
+     */
+    export interface SchemaDestinations {
+      /**
+         * The table's own destinations, or null when it follows its source.
+         * @nullable
+         */
+      destination_ids: string[] | null;
+      /** Whether this table follows its source rather than having its own destinations. */
+      inherits_from_source: boolean;
+      /** Where the table actually syncs, after inheritance is resolved. */
+      effective_destination_ids?: string[];
+    }
+
     export interface ScoreDefinitionCreate {
       /**
          * Human-readable scorer name.
@@ -75057,6 +75080,14 @@ export namespace Schemas {
       source_type: ExternalDataSourceTypeEnum;
       /** Connection details as flat keys for the source_type — the same fields the create flow accepts (host, port, password, API key, …). Checked against a live connection before being stored. */
       payload: SourceCredentialCreatePayload;
+    }
+
+    /**
+     * Response shape for a source's destination set.
+     */
+    export interface SourceDestinations {
+      /** Destinations every table on this source syncs to. */
+      destination_ids: string[];
     }
 
     export interface SourceMappingSuggestion {

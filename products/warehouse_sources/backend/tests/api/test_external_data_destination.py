@@ -27,7 +27,7 @@ class DestinationAPITestBase(APIBaseTest):
         )
         self.schema = ExternalDataSchema.objects.create(team=self.team, source=self.source, name="charges")
 
-    def _integration(self, kind: str = Integration.IntegrationKind.AWS_REDSHIFT) -> Integration:
+    def _integration(self, kind: str = Integration.IntegrationKind.POSTGRESQL) -> Integration:
         self._integration_seq = getattr(self, "_integration_seq", 0) + 1
         return Integration.objects.create(
             team=self.team, kind=kind, integration_id=f"{kind}-{self._integration_seq}", config={}
@@ -61,6 +61,7 @@ class TestExternalDataDestinationAPI(DestinationAPITestBase):
         assert "integration" in response.json()["attr"]
 
     def test_the_integration_must_match_the_destination_type(self) -> None:
+        # Redshift is Postgres-wire, so it needs a postgresql integration, not a Snowflake one.
         snowflake_integration = self._integration(Integration.IntegrationKind.SNOWFLAKE)
 
         response = self.client.post(

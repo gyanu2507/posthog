@@ -31,6 +31,7 @@ export const SCHEMA_CONFIGURATION_SECTIONS = [
     'sync-method',
     'columns',
     'descriptions',
+    'destinations',
     'schedule',
     'danger-zone',
 ] as const

@@ -67,6 +67,7 @@ from products.warehouse_sources.backend.models.external_data_destination import 
 )
 from products.warehouse_sources.backend.presentation.views.destination_links import (
     DestinationLinkSerializer,
+    SchemaDestinationsSerializer,
     set_schema_destinations,
 )
 from products.warehouse_sources.backend.presentation.views.source_api_versions import (
@@ -1455,6 +1456,10 @@ class ExternalDataSchemaViewset(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(parameters=[LogEntryRequestSerializer])
+    @extend_schema(
+        request=DestinationLinkSerializer,
+        responses={200: SchemaDestinationsSerializer},
+    )
     @action(methods=["GET", "PATCH"], detail=True, filter_backends=[])
     def destinations(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         """Read or replace this table's destination override.

@@ -25,6 +25,7 @@ from products.warehouse_sources.backend.models.external_data_schema import (
     update_sync_type_config_keys,
 )
 from products.warehouse_sources.backend.models.external_data_source import ExternalDataSource
+from products.warehouse_sources.backend.temporal.data_imports.destination_jobs import run_destinations_for_job
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.common.extract import (
     advance_xmin_state,
     cleanup_memory,
@@ -207,6 +208,9 @@ class PipelineV3(Generic[ResumableData]):
             is_first_ever_sync=is_first_ever_sync,
             workflow_id=current_workflow_id(),
             workflow_run_id=current_workflow_run_id(),
+            # Empty for runs with no destination children, which is every run before
+            # destinations and every run of a team the flag is off for.
+            destinations=run_destinations_for_job(self._job),
         )
 
         self._resumable_source_manager = resumable_source_manager

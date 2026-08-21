@@ -164,6 +164,7 @@ from products.warehouse_sources.backend.facade.types import (
 from products.warehouse_sources.backend.models.external_data_destination import ExternalDataSourceDestination
 from products.warehouse_sources.backend.presentation.views.destination_links import (
     DestinationLinkSerializer,
+    SourceDestinationsSerializer,
     set_source_destinations,
 )
 from products.warehouse_sources.backend.presentation.views.external_data_schema import (
@@ -4899,6 +4900,10 @@ class ExternalDataSourceViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixi
         serializer = DirectConnectionSourceOptionSerializer(options, many=True)
         return Response(status=status.HTTP_200_OK, data=serializer.data)
 
+    @extend_schema(
+        request=DestinationLinkSerializer,
+        responses={200: SourceDestinationsSerializer},
+    )
     @action(methods=["GET", "PATCH"], detail=True)
     def destinations(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         """Read or replace the destinations every table on this source syncs to.

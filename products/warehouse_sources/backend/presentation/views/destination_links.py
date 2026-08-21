@@ -20,6 +20,32 @@ EMPTY_SET_MESSAGE = (
 )
 
 
+class SourceDestinationsSerializer(serializers.Serializer):
+    """Response shape for a source's destination set."""
+
+    destination_ids = serializers.ListField(
+        child=serializers.UUIDField(), help_text="Destinations every table on this source syncs to."
+    )
+
+
+class SchemaDestinationsSerializer(serializers.Serializer):
+    """Response shape for a table's destination override."""
+
+    destination_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_null=True,
+        help_text="The table's own destinations, or null when it follows its source.",
+    )
+    inherits_from_source = serializers.BooleanField(
+        help_text="Whether this table follows its source rather than having its own destinations."
+    )
+    effective_destination_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        help_text="Where the table actually syncs, after inheritance is resolved.",
+    )
+
+
 class DestinationLinkSerializer(serializers.Serializer):
     destination_ids = serializers.ListField(
         child=serializers.UUIDField(),

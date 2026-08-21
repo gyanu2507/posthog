@@ -38,13 +38,16 @@ import type {
     PaginatedExternalDataSchemaListApi,
     PaginatedExternalDataSourceSerializersListApi,
     PaginatedWarehouseColumnStatisticsListApi,
+    PatchedDestinationLinkApi,
     PatchedExternalDataDestinationApi,
     PatchedExternalDataSchemaApi,
     PatchedExternalDataSourceBulkUpdateSchemasApi,
     PatchedExternalDataSourceSerializersApi,
+    SchemaDestinationsApi,
     SourceConnectLinkApi,
     SourceCredentialApi,
     SourceCredentialCreateApi,
+    SourceDestinationsApi,
     SourcePreviewRequestApi,
     SourcePreviewResponseApi,
     SourceSetupApi,
@@ -370,8 +373,8 @@ export const externalDataSchemasDestinationsRetrieve = async (
     id: string,
     params?: ExternalDataSchemasDestinationsRetrieveParams,
     options?: RequestInit
-): Promise<void> => {
-    return apiMutator<void>(getExternalDataSchemasDestinationsRetrieveUrl(projectId, id, params), {
+): Promise<SchemaDestinationsApi> => {
+    return apiMutator<SchemaDestinationsApi>(getExternalDataSchemasDestinationsRetrieveUrl(projectId, id, params), {
         ...options,
         method: 'GET',
     })
@@ -405,16 +408,19 @@ export const getExternalDataSchemasDestinationsPartialUpdateUrl = (
 export const externalDataSchemasDestinationsPartialUpdate = async (
     projectId: string,
     id: string,
-    patchedExternalDataSchemaApi?: NonReadonly<PatchedExternalDataSchemaApi>,
+    patchedDestinationLinkApi?: PatchedDestinationLinkApi,
     params?: ExternalDataSchemasDestinationsPartialUpdateParams,
     options?: RequestInit
-): Promise<void> => {
-    return apiMutator<void>(getExternalDataSchemasDestinationsPartialUpdateUrl(projectId, id, params), {
-        ...options,
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(patchedExternalDataSchemaApi),
-    })
+): Promise<SchemaDestinationsApi> => {
+    return apiMutator<SchemaDestinationsApi>(
+        getExternalDataSchemasDestinationsPartialUpdateUrl(projectId, id, params),
+        {
+            ...options,
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...options?.headers },
+            body: JSON.stringify(patchedDestinationLinkApi),
+        }
+    )
 }
 
 export const getExternalDataSchemasIncrementalFieldsCreateUrl = (projectId: string, id: string) => {
@@ -757,8 +763,8 @@ export const externalDataSourcesDestinationsRetrieve = async (
     projectId: string,
     id: string,
     options?: RequestInit
-): Promise<void> => {
-    return apiMutator<void>(getExternalDataSourcesDestinationsRetrieveUrl(projectId, id), {
+): Promise<SourceDestinationsApi> => {
+    return apiMutator<SourceDestinationsApi>(getExternalDataSourcesDestinationsRetrieveUrl(projectId, id), {
         ...options,
         method: 'GET',
     })
@@ -776,14 +782,14 @@ export const getExternalDataSourcesDestinationsPartialUpdateUrl = (projectId: st
 export const externalDataSourcesDestinationsPartialUpdate = async (
     projectId: string,
     id: string,
-    patchedExternalDataSourceSerializersApi?: NonReadonly<PatchedExternalDataSourceSerializersApi>,
+    patchedDestinationLinkApi?: PatchedDestinationLinkApi,
     options?: RequestInit
-): Promise<void> => {
-    return apiMutator<void>(getExternalDataSourcesDestinationsPartialUpdateUrl(projectId, id), {
+): Promise<SourceDestinationsApi> => {
+    return apiMutator<SourceDestinationsApi>(getExternalDataSourcesDestinationsPartialUpdateUrl(projectId, id), {
         ...options,
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(patchedExternalDataSourceSerializersApi),
+        body: JSON.stringify(patchedDestinationLinkApi),
     })
 }
 

@@ -13,13 +13,15 @@ destination a customer configured, and billing it, is worse than failing the bat
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from products.warehouse_sources.backend.temporal.data_imports.destinations.contracts import (
     DestinationRunContext,
     DestinationWriter,
 )
 
-DestinationWriterFactory = Callable[[DestinationRunContext], DestinationWriter]
+# A writer class is the usual factory: calling it with the run context builds the writer.
+DestinationWriterFactory = Callable[[DestinationRunContext], Any]
 
 _writer_factories: dict[str, DestinationWriterFactory] = {}
 

@@ -87,6 +87,8 @@ export interface ConfigurationTabProps {
     syncHistoryUrl?: string
 }
 
+import { DestinationsSection } from './DestinationsSection'
+
 export function ConfigurationTab({
     sourceId,
     schema,
@@ -120,6 +122,8 @@ export function ConfigurationTab({
                     <ApiVersionSection sourceId={sourceId} source={source} schema={schema} />
                 </div>
             )
+        case 'destinations':
+            return <DestinationsSection schemaId={schema.id} />
         case 'columns':
             return (
                 <ColumnsAndRowFiltersSection

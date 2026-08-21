@@ -237,6 +237,7 @@ class DeltaBatchConsumerAdapter:
                 job_id=batch.job_id,
                 team_id=batch.team_id,
                 error=reason,
+                run_uuid=batch.run_uuid,
             )
         except Exception as e:
             # Leave the job for the reconcile sweep rather than crashing the consumer.
@@ -676,12 +677,24 @@ def _get_job_status_and_error(*, job_id: str, team_id: int) -> tuple[str, str | 
     return ExternalDataJob.objects.filter(id=job_id, team_id=team_id).values_list("status", "latest_error").first()
 
 
-def _update_job_status_to_failed(*, job_id: str, team_id: int, error: str) -> None:
+def _update_job_status_to_failed(*, job_id: str, team_id: int, error: str, run_uuid: str = "") -> None:
     from products.data_warehouse.backend.facade.api import update_external_job_status
     from products.warehouse_sources.backend.models.external_data_job import ExternalDataJob
+    from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.load.warehouse_destination import (
+        fail_warehouse_child,
+        warehouse_child_for_job,
+    )
 
     # Drop stale app-DB connections so this write reconnects instead of leaving the job stuck in Running.
     close_old_connections()
+
+    # A run that fans out records the failure against the warehouse's own child. The run itself
+    # is only failed once every destination is terminal, because failing it here would sweep the
+    # queue and cut off a sibling destination that is still mid-run.
+    warehouse_child = warehouse_child_for_job(job_id, team_id)
+    if warehouse_child is not None:
+        fail_warehouse_child(warehouse_child, team_id=team_id, run_uuid=run_uuid, error=error)
+        return
 
     existing = ExternalDataJob.objects.filter(id=job_id, team_id=team_id, status=ExternalDataJob.Status.FAILED).first()
     if existing is not None:

@@ -80,6 +80,10 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline
     IDEMPOTENCY_HIT_TOTAL,
     PARQUET_READ_DURATION_SECONDS,
 )
+from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.load.warehouse_destination import (
+    complete_warehouse_child,
+    warehouse_child_for_job,
+)
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.messages import (
     ExportSignalMessage,
     SyncTypeLiteral,
@@ -480,6 +484,21 @@ def _mark_job_completed(export_signal: ExportSignalMessage) -> None:
     # Reconnect stale connections before the transaction; close_old_connections must never
     # run inside an atomic block since it can drop the connection mid-transaction.
     close_old_connections()
+
+    # When the run fans out to several destinations, the warehouse is one of them: finalize its
+    # own child and let whichever destination finishes last close the run. The sync lock is
+    # still released here, because Delta maintenance runs under it before the next extraction
+    # and must not race a load that is still in flight.
+    warehouse_child = warehouse_child_for_job(export_signal.job_id, export_signal.team_id)
+    if warehouse_child is not None:
+        complete_warehouse_child(
+            warehouse_child,
+            team_id=export_signal.team_id,
+            run_uuid=export_signal.run_uuid,
+        )
+        async_to_sync(finish_row_tracking)(export_signal.team_id, export_signal.schema_id)
+        _release_pipeline_lock_for_job(export_signal)
+        return
 
     # The Completed write and cursor promotion share one transaction so they commit together:
     # if promotion raises, the completion rolls back and the batch retries, never stranding a

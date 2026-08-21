@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 
 import posthoganalytics
@@ -25,6 +26,9 @@ from products.warehouse_sources.backend.models.external_data_job import External
 
 if TYPE_CHECKING:
     from products.warehouse_sources.backend.models.external_data_schema import ExternalDataSchema
+    from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.postgres_queue.destination_queue import (
+        RunDestination,
+    )
 
 WAREHOUSE_MULTI_DESTINATION_FLAG = "warehouse-multi-destination"
 
@@ -152,3 +156,33 @@ def has_warehouse_destination(children: list[ExternalDataDestinationJob]) -> boo
     when its child goes terminal, so a run without one must release it itself.
     """
     return any(c.destination_type == ExternalDataDestination.Type.POSTHOG_WAREHOUSE for c in children)
+
+
+def run_destinations_for_job(job: ExternalDataJob) -> list[RunDestination]:
+    """The run's destination children, in the shape the queue producer writes.
+
+    Returns nothing when the run has no children, which is every run before destinations and
+    every run of a team the flag is off for. The producer then writes batches exactly as it
+    always did, with no work items behind them.
+    """
+    from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.postgres_queue.destination_queue import (  # noqa: PLC0415 — keeps the queue driver off the app import path
+        RunDestination,
+    )
+
+    try:
+        children = list(ExternalDataDestinationJob.objects.for_team(job.team_id, canonical=True).filter(job_id=job.id))
+    except (DjangoValidationError, ValueError):
+        # An id that is not a UUID cannot have children by definition. Real database errors are
+        # left to propagate: quietly returning nothing would stage batches with no work items
+        # behind them, so the destinations would never receive the run and their child jobs
+        # would sit Running forever.
+        return []
+    return [
+        RunDestination(
+            destination_job_id=str(child.id),
+            destination_id=str(child.destination_id) if child.destination_id else "",
+            destination_type=child.destination_type,
+            config=child.config_snapshot or {},
+        )
+        for child in children
+    ]

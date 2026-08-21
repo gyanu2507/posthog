@@ -509,6 +509,29 @@ export interface PatchedExternalDataSchemaApi {
 }
 
 /**
+ * Response shape for a table's destination override.
+ */
+export interface SchemaDestinationsApi {
+    /**
+     * The table's own destinations, or null when it follows its source.
+     * @nullable
+     */
+    destination_ids: string[] | null
+    /** Whether this table follows its source rather than having its own destinations. */
+    inherits_from_source: boolean
+    /** Where the table actually syncs, after inheritance is resolved. */
+    effective_destination_ids?: string[]
+}
+
+export interface PatchedDestinationLinkApi {
+    /**
+     * Destinations to sync to. On a table, null clears the override so the table follows its source again.
+     * @nullable
+     */
+    destination_ids?: string[] | null
+}
+
+/**
  * * `web` - web
  * * `api` - api
  * * `mcp` - mcp
@@ -4775,6 +4798,14 @@ export interface ExternalDataSourceBulkUpdateSchemaApi {
 export interface PatchedExternalDataSourceBulkUpdateSchemasApi {
     /** Schema updates to apply in a single batch. */
     schemas?: ExternalDataSourceBulkUpdateSchemaApi[]
+}
+
+/**
+ * Response shape for a source's destination set.
+ */
+export interface SourceDestinationsApi {
+    /** Destinations every table on this source syncs to. */
+    destination_ids: string[]
 }
 
 /**
