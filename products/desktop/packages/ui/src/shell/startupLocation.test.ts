@@ -49,13 +49,13 @@ describe("startup location", () => {
         personal_created: true,
         general_created: true,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
 
     await expect(
       resolveStartupLocation("project", client, true),
     ).resolves.toEqual({
-      href: "/website/general-id",
+      href: "/website/general-id/tasks/session-id",
       firstRun: { generalChannelId: "general-id" },
     });
   });
@@ -68,7 +68,7 @@ describe("startup location", () => {
         personal_created: false,
         general_created: true,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
 
     await resolveStartupLocation("project", client, true);
@@ -87,9 +87,12 @@ describe("startup location", () => {
       startOnboardingSession: vi.fn().mockReturnValue(new Promise(() => {})),
     };
 
-    await expect(
-      resolveStartupLocation("project", client, true),
-    ).resolves.toEqual({
+    vi.useFakeTimers();
+    const resolving = resolveStartupLocation("project", client, true);
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+
+    await expect(resolving).resolves.toEqual({
       href: "/website/general-id",
       firstRun: { generalChannelId: "general-id" },
     });
@@ -105,7 +108,7 @@ describe("startup location", () => {
         personal_created: false,
         general_created: false,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
 
     await expect(
@@ -131,7 +134,7 @@ describe("startup location", () => {
         personal_created: true,
         general_created: true,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
 
     await expect(
@@ -154,7 +157,7 @@ describe("startup location", () => {
       .mockResolvedValue(undefined);
     const client = {
       provisionDefaultTaskChannels: vi.fn().mockRejectedValue(new Error("404")),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
 
     await expect(
@@ -176,7 +179,7 @@ describe("startup location", () => {
         personal_created: false,
         general_created: false,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
     primeStartupProvision(
       "someone-else",
@@ -201,7 +204,7 @@ describe("startup location", () => {
         personal_created: true,
         general_created: true,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
 
     await expect(
@@ -213,7 +216,7 @@ describe("startup location", () => {
     vi.spyOn(stateStorage, "getItem").mockResolvedValue(null);
     const client = {
       provisionDefaultTaskChannels: vi.fn(),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
     primeStartupProvision(
       "project",
@@ -227,7 +230,7 @@ describe("startup location", () => {
     await expect(
       resolveStartupLocation("project", client, true),
     ).resolves.toEqual({
-      href: "/website/general-id",
+      href: "/website/general-id/tasks/session-id",
       firstRun: { generalChannelId: "general-id" },
     });
     expect(client.provisionDefaultTaskChannels).not.toHaveBeenCalled();
@@ -238,7 +241,7 @@ describe("startup location", () => {
         personal_created: false,
         general_created: false,
       }),
-      startOnboardingSession: vi.fn().mockResolvedValue(true),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
     };
     await resolveStartupLocation("project", again, true);
     expect(again.provisionDefaultTaskChannels).toHaveBeenCalledOnce();
