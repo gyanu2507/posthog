@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  BookOpenTextIcon,
   EnvelopeSimple,
   HouseSimple,
   type IconProps,
@@ -26,6 +27,7 @@ import {
   navigateToInbox,
   navigateToLoops,
   navigateToWebsiteCommandCenter,
+  navigateToWebsiteContext,
 } from "@posthog/ui/router/navigationBridge";
 import type { AppViewType } from "@posthog/ui/router/useAppView";
 import type { ComponentType } from "react";
@@ -47,7 +49,7 @@ export interface RailDestination {
   shortcut?: string;
   count?: (counts: RailCounts) => number;
   countTone?: CountBadgeTone;
-  enabled?: (flags: { loops: boolean }) => boolean;
+  enabled?: (flags: { loops: boolean; context: boolean }) => boolean;
 }
 
 export const RAIL_DESTINATIONS: readonly RailDestination[] = [
@@ -111,6 +113,16 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
     onPick: () => navigateToLoops(),
     enabled: (flags) => flags.loops,
   },
+  {
+    pane: "context",
+    customizableId: "contexts",
+    label: "Context",
+    analyticsId: "contexts",
+    Icon: BookOpenTextIcon,
+    viewTypes: ["context"],
+    onPick: () => navigateToWebsiteContext(),
+    enabled: (flags) => flags.context,
+  },
 ];
 
 const PANE_BY_VIEW_TYPE = new Map<AppViewType, NavRailPane>(
@@ -130,14 +142,16 @@ export function visibleRailDestinations({
   overrides,
   order,
   loops,
+  context,
 }: {
   overrides: NavItemOverrides;
   order: readonly CustomizableNavItemId[];
   loops: boolean;
+  context: boolean;
 }): readonly RailDestination[] {
   const shown = RAIL_DESTINATIONS.filter(
     ({ customizableId, enabled }) =>
-      (enabled?.({ loops }) ?? true) &&
+      (enabled?.({ loops, context }) ?? true) &&
       (!customizableId || isNavItemVisible(overrides, customizableId)),
   );
   if (order.length === 0) return shown;

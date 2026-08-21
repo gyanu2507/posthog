@@ -10,7 +10,8 @@ export type NavRailPane =
   | "activity"
   | "inbox"
   | "command-center"
-  | "loops";
+  | "loops"
+  | "context";
 
 const PANES_WITH_SIDEBAR = new Set<NavRailPane>(["spaces", "activity"]);
 
