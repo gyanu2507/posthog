@@ -8,7 +8,7 @@ import posthog.uuidt
 
 
 class Migration(migrations.Migration):
-    dependencies = [('posthog', '1310_provisioning_rate_limit_overrides'), ('warehouse_sources', '0151_repin_linkedin_ads_api_version'), migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
+    dependencies = [('posthog', '1310_provisioning_rate_limit_overrides'), ('warehouse_sources', '0152_callable_choices'), migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
 
     operations = [
         migrations.AddField(
