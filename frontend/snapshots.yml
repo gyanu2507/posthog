@@ -4745,25 +4745,25 @@ snapshots:
     posthog-3000-keyboard-shortcut--within-tooltip--light:
         hash: v1.k794b7964.aa2d9701c9134d5c374b6517f2fa542eb24c7e15ebf0d65f64efbc0ec2a99efa.BL1mMRm5CNDAmAMk-2pf-lp8EI6t65oBqoy990BdgyQ
     products-alerts-alert-history-chart--anomaly-probability-cutoff--dark:
-        hash: v1.k794b7964.24b4adbdb188cde0541f0f66f73af27bdd04408c31291bf68316bb3817759643.GuBTwp4mmQHHVO07xyvgxbSCEuKylDxNzue0viIzLts
+        hash: v1.k794b7964.2db775a5c210015a4ed49984a2f73c1dcc39d2fd4d649fcb9788eae7a869208e.25AYQDSbJHqxRd3pHUARQEXynl89xA6VBkI_chQYQfQ
     products-alerts-alert-history-chart--anomaly-probability-cutoff--light:
-        hash: v1.k794b7964.500239b49ffc44daa00a24697ef4946abf9758e01dedee6dbb1d1af3906f257c.nl3i95cuHsjkdCBCnS4xRr8tQF_B2SfUyS4F_g_55LI
+        hash: v1.k794b7964.0ed79cf4dd044e2d33afa1f4b44fe114e3fc576087651ee2c044cdfd5a3349f0.lRhQ7wXMV0rkgvpSGXG8njoHp4OpY9FN4VdMaajk-aQ
     products-alerts-alert-history-chart--default--dark:
-        hash: v1.k794b7964.efa18d82f9a40253504c02eb062d651733a4b9cd5bef60cb826a2d2d4e5aca15.ygobekdfgBV5hQ5lhMqSVntK2thZLJ62elkYyIsup2A
+        hash: v1.k794b7964.562fc29d3f40df079d52d04e5066ba2b41d222af357292599f63a8589f84f317.Smg87fa0ULmfBEudyc73rrb3vBJuYn8C5hF6m3s4_kM
     products-alerts-alert-history-chart--default--light:
-        hash: v1.k794b7964.a7d3030c73c7d63ac5ebdb9f35f985b226f08b02b51bbca23b57a4cf7bc923ab.wxt6Ij2d2K3YHE_xMHn31yw55jtjg3NumtkOFqIt-pg
+        hash: v1.k794b7964.5cc332cb9ea86e80cb5f174237d913f104ad7daca7e9aeed876d54052909bc0d.Q310GBWqFtwovBZrXISje07l6L2ayyXDK9C-S4Yxzsk
     products-alerts-alert-history-chart--percentage-thresholds--dark:
-        hash: v1.k794b7964.2046df03cbbcf8dfe13000c0b206825d4eeb0a245d77018eca9e667cac408220.aQCr7KvmqJfS_vvMr0sCmxpChikqme1d-XafYaz5lnk
+        hash: v1.k794b7964.956d0fc7d497fed0cd319ce4de9e6f9fb2ceceb9966ecaa89a31e275222714af.Xv508vvuGQ76NXsOtB-qAIEm645WPTQafMSkPuMAuLQ
     products-alerts-alert-history-chart--percentage-thresholds--light:
-        hash: v1.k794b7964.4bbbbc9b49cda8e42351cc594ad03efa6ee5814ca544fff3744faa9d1a4e3ae1.Yj-kqEp4dDdxh1kcOikNz-_-fGpqJPDT1c_rIf7UCyM
+        hash: v1.k794b7964.fb12f61b7ee22a14ce18c1557b8d129a8e7287c5d373ad05dfe2be68d2f5a57b.wnDyj-l5QFHDUQLqa9BtMU4K0KFapYbZJBa6wstS2TE
     products-alerts-alert-history-chart--threshold-changed--dark:
-        hash: v1.k794b7964.be71ec307fbbba2ac6bd1526a4715e2b0694569a22e238e89b2010c67ec8a572.X1TzLmh_AD3_Z7FDKT6xCtBUaIiCf9pA399uMF_FLHk
+        hash: v1.k794b7964.9b1e57af0c792270d5bb0c692e76383e6e25cfa49a710ea1fe0e10d76778e6ee.14FVRTmE3_Wxg4XSw5jYopKfB_Sq91DMqOSzgsODrmI
     products-alerts-alert-history-chart--threshold-changed--light:
-        hash: v1.k794b7964.d8da461055012775ff1c2b8fc9d1f5a9c89b29ff26fc55f5d46a3d8cd16dd528.QcTzP3OJNKPkc5oFv-o12pqIzZhAsGe3dx535bJZRpM
+        hash: v1.k794b7964.1da2f25f17daaffbcde1fe14a812a6d1cb51df4484ffcbb403ea5fddbf8a6592.aZjdOgfHLTQxtQT2FXNasDLpajmaogoaa-VFf-SeV1w
     products-alerts-alert-history-chart--truncated-history--dark:
-        hash: v1.k794b7964.a6c3e16a4c2d3afbda4f0c6ee8654059c1ce1af118e06ff9684245d7d4e90d56.9SeAY0VADP000GUzOLjde2l3zk2b9byQ_OcXjfqIlJw
+        hash: v1.k794b7964.7e457f18695a86d86f9524c1ae27d813ce3c5d1bd2d7166c2a5044d3e2cd6bc3.fo-f34-A5WKOdB0taW8UCHzCvjyPMrArOTZhMrQdqXA
     products-alerts-alert-history-chart--truncated-history--light:
-        hash: v1.k794b7964.fb04c5eb2dee3e54286be4a599a42b81f81f696254510bc5dc107ce44a182231.fmS-_SPCu4bmN_8mtGiy_Oux8l-ylT8S8UvLt2OtwZo
+        hash: v1.k794b7964.7d8cc869de7ef911b4393e7e494efc3ba36e49dbf3304a46a240ef835c040839.cNzdqkeNqE4Tyre3Cpt5yh9FjmcuG9nLKRNyq-A8B9w
     products-alerts-alert-modal--create-wizard--dark:
         hash: v1.k794b7964.e3efb1235db76f2fe8b3ccff465df9b84263211b8648d57a725cfcf3a92c08c9.mTtZUY5-gkDVf9yjhBIR_Cx1_5arKEIEJh-2g-cLQBQ
     products-alerts-alert-modal--create-wizard--light:
@@ -6064,6 +6064,10 @@ snapshots:
         hash: v1.k794b7964.6fa2b66d27a1675f40be299d4063d6530d9b7899854e2a4f90a7ed9261457532.zZxRebzp1LR0fgFq5G61QARku_wdiC8mrBG5BtU4Ilo
     scenes-app-data-management-revenue-analytics-event-configuration-modal--default--light:
         hash: v1.k794b7964.380602ae2b746844554126dce9f27bca9ec04854e281d8467c8de724f4fd49fc.ySrW_TUWEFnfdhQOLX6USTN5uxF1kODMuE5iXuYWtQU
+    scenes-app-data-pipelines-destinations-incident-replay-banner--default--dark:
+        hash: v1.k794b7964.495541da3e0fca8dd62c26765ee8a75114e74044043c8652d5e3916fa585aa1e.158vgBLaBfmkD8G_AyFft_Ne1FGoz3LdwiodWKkYcdE
+    scenes-app-data-pipelines-destinations-incident-replay-banner--default--light:
+        hash: v1.k794b7964.414074df5c95518c0af7fe51114c14b2b12b7a6af87e82483a6c7bc2fbcd772e.KuUj0rKRehlGIPAEKk_fdOigmjOe4mg6EuCBTwhafo0
     scenes-app-data-pipelines-event-filtering--add-condition-and-test-case--dark:
         hash: v1.k794b7964.054b485fa44909bda3f635ba9d134cea4dfa7e60bbc65206ba752f23b7729c42._2cxQzZ_XmaTvoI9Z7hIKh5kpuDY5rxQG0-1RNRyDgE
     scenes-app-data-pipelines-event-filtering--add-condition-and-test-case--light:
