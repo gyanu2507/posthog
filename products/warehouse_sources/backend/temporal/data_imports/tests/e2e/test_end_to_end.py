@@ -188,6 +188,10 @@ class _PostgresQueueReplay:
         for row in rows:
             if isinstance(row.get("metadata"), str):
                 row["metadata"] = json.loads(row["metadata"])
+            # Same treatment as metadata: this cursor hands jsonb back as text, and iterating
+            # the string would feed "[" to the destination lookup as if it were an id.
+            if isinstance(row.get("destination_ids"), str):
+                row["destination_ids"] = json.loads(row["destination_ids"])
             batch = PendingBatch(latest_attempt=0, **row)
             try:
                 process_message(batch.to_export_signal())
