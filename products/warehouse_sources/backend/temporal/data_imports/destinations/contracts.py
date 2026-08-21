@@ -32,7 +32,6 @@ class DestinationRunContext:
     schema_id: str
     source_id: str
     job_id: str
-    destination_job_id: str
     run_uuid: str
     destination_id: str
     destination_type: str

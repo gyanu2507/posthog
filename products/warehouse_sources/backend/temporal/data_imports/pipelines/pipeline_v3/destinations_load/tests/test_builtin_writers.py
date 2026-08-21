@@ -24,7 +24,6 @@ def _ctx(destination_type: str) -> DestinationRunContext:
         schema_id="schema",
         source_id="source",
         job_id="job",
-        destination_job_id="destination-job",
         run_uuid="run-a1",
         destination_id="destination",
         destination_type=destination_type,

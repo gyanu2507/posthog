@@ -66,7 +66,6 @@ def _ctx(table_name: str, sync_type: str, primary_keys: tuple[str, ...] = ()) ->
         schema_id="schema",
         source_id="source",
         job_id="job",
-        destination_job_id="destination-job",
         run_uuid=str(uuid.uuid4()),
         destination_id="destination",
         destination_type="Postgres",

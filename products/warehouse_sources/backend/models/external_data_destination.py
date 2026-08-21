@@ -3,8 +3,6 @@ from django.db import models
 from posthog.models.scoping.root_mixin import TeamScopedRootMixin
 from posthog.models.utils import DeletedMetaFields, UpdatedMetaFields, UUIDTModel, sane_repr
 
-from products.warehouse_sources.backend.models.external_data_job import ExternalDataJob
-
 
 class ExternalDataDestination(TeamScopedRootMixin, UpdatedMetaFields, DeletedMetaFields, UUIDTModel):
     """Somewhere a warehouse source writes its synced rows.
@@ -118,60 +116,6 @@ class ExternalDataSchemaDestination(TeamScopedRootMixin, UUIDTModel):
             models.UniqueConstraint(fields=["schema", "destination"], name="wsd_schema_dest_uniq"),
         ]
 
-
-class ExternalDataDestinationJob(TeamScopedRootMixin, UpdatedMetaFields, UUIDTModel):
-    """One destination's share of a sync run.
-
-    The parent `ExternalDataJob` owns extraction; each child owns delivery to one destination
-    and is finalized by whichever consumer wrote it. The parent's status is the aggregate —
-    see `destination_finalization.finalize_destination_job_and_maybe_close_parent`.
-
-    Billing sums `rows_synced` over completed billable children, so a run that fans out to two
-    destinations bills twice while a destination that failed bills nothing.
-    """
-
-    Status = ExternalDataJob.Status
-
-    team = models.ForeignKey("posthog.Team", on_delete=models.CASCADE, db_constraint=False)
-    job = models.ForeignKey(ExternalDataJob, on_delete=models.CASCADE, related_name="destination_jobs")
-    destination = models.ForeignKey(ExternalDataDestination, on_delete=models.SET_NULL, null=True, blank=True)
-    # Snapshots, so a run's history stays readable after its destination is renamed or deleted.
-    destination_type = models.CharField(max_length=64, choices=ExternalDataDestination.Type)
-    destination_name = models.CharField(max_length=400)
-    config_snapshot = models.JSONField(default=dict, blank=True)
-
-    status = models.CharField(max_length=400)
-    rows_synced = models.BigIntegerField(null=True, blank=True)
-    latest_error = models.TextField(null=True, blank=True)
-    billable = models.BooleanField(default=True, db_default=True)
-    finished_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    __repr__ = sane_repr("id", "job_id", "destination_type", "status")
-
-    class Meta:
-        db_table = "posthog_externaldatadestinationjob"
-        constraints = [
-            models.UniqueConstraint(fields=["job", "destination"], name="wsd_job_dest_uniq"),
-        ]
-        indexes = [
-            # Serves the usage-report sum: equality on team/billable/status, range on finished_at.
-            models.Index(
-                fields=["team", "billable", "status", "finished_at"],
-                name="wsdj_billing_idx",
-            ),
-            models.Index(fields=["job"], name="wsdj_job_idx"),
-        ]
-
-
-TERMINAL_DESTINATION_JOB_STATUSES = frozenset(
-    {
-        ExternalDataDestinationJob.Status.COMPLETED,
-        ExternalDataDestinationJob.Status.FAILED,
-        ExternalDataDestinationJob.Status.BILLING_LIMIT_REACHED,
-        ExternalDataDestinationJob.Status.BILLING_LIMIT_TOO_LOW,
-    }
-)
 
 DEFAULT_WAREHOUSE_DESTINATION_NAME = "PostHog warehouse"
 

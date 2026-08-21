@@ -45,7 +45,6 @@ from products.warehouse_sources.backend.models.external_data_schema import (
     update_should_sync,
 )
 from products.warehouse_sources.backend.models.external_data_source import ExternalDataSource
-from products.warehouse_sources.backend.temporal.data_imports.destination_finalization import cascade_destination_jobs
 from products.warehouse_sources.backend.temporal.data_imports.external_product_hooks import (
     EmitSignalsActivityInputs,
     PersonPropertySyncActivityInputs,
@@ -366,24 +365,6 @@ async def update_external_data_job_model(inputs: UpdateExternalDataJobStatusInpu
         team_id=inputs.team_id,
     )
 
-    # This path owns the whole run rather than one destination — extraction failed, the billing
-    # limit stopped it, or it produced no batches at all. Make the children agree, so a consumer
-    # that later picks up a straggler batch finds its child already terminal and stops.
-    #
-    # Swallowed on purpose: the run's own status is already written above, and leaving a child
-    # non-terminal is bookkeeping the reconcile sweep can repair. Raising here would fail the
-    # finalization activity and leave the run itself stuck Running, which is far worse.
-    try:
-        await database_sync_to_async_pool(cascade_destination_jobs)(
-            job_id=job_id,
-            team_id=inputs.team_id,
-            status=inputs.status,
-            latest_error=inputs.latest_error,
-        )
-    except Exception as e:
-        logger.exception("Failed to cascade destination jobs", job_id=job_id, error=str(e))
-        capture_exception(e)
-
     logger.info(
         f"Updated external data job with for external data source {job_id} to status {inputs.status}",
     )
@@ -521,9 +502,6 @@ class ExternalDataJobWorkflow(PostHogWorkflow):
         workflow_starts_post_import = False
         is_v3 = False
         lock_token = None
-        # Defaults to True so a run that never reaches job creation (and every history recorded
-        # before destinations existed) keeps the old rule: the consumer releases the v3 lock.
-        warehouse_destination_enabled = True
 
         # Check pipeline version (FF evaluated once here, propagated everywhere)
         try:
@@ -598,7 +576,6 @@ class ExternalDataJobWorkflow(PostHogWorkflow):
                 enrichment_needed = False
                 statistics_needed = False
                 person_property_sync_enabled = False
-                warehouse_destination_enabled = True
             else:
                 job_id = create_job_result.job_id
                 incremental_or_append = create_job_result.incremental_or_append
@@ -609,7 +586,6 @@ class ExternalDataJobWorkflow(PostHogWorkflow):
                 enrichment_needed = create_job_result.enrichment_needed
                 statistics_needed = create_job_result.statistics_needed
                 person_property_sync_enabled = create_job_result.person_property_sync_enabled
-                warehouse_destination_enabled = create_job_result.warehouse_destination_enabled
             update_inputs.job_id = str(job_id) if job_id is not None else None
 
             # Check billing limits
@@ -987,14 +963,7 @@ class ExternalDataJobWorkflow(PostHogWorkflow):
             # When consumer_manages_job_status is True, the consumer releases.
             # Runs before the post-import start so a raise there (cancellation)
             # can't leave the lock held.
-            #
-            # The warehouse writer is the one that releases on the consumer side, because
-            # Delta table maintenance runs pre-extraction under this lock and must not race
-            # in-flight writes. A run whose destinations are all external therefore has no
-            # consumer that will release it, so the workflow does. The flag defaults to True
-            # on histories recorded before destinations existed, keeping the old behavior.
-            consumer_releases_lock = consumer_manages_job_status and warehouse_destination_enabled
-            if is_v3 and lock_token and not consumer_releases_lock:
+            if is_v3 and lock_token and not consumer_manages_job_status:
                 try:
                     await workflow.execute_activity(
                         release_v3_pipeline_lock_activity,

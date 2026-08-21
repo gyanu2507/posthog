@@ -68,6 +68,11 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.batch_consumer import (
     OwnershipLostError,
 )
+from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.delivery import (
+    deliver_batch_to_destinations,
+    external_destinations_for,
+    warehouse_is_a_destination,
+)
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.load.idempotency import (
     is_batch_already_processed,
     mark_batch_as_processed,
@@ -79,10 +84,6 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline
     DELTA_WRITE_DURATION_SECONDS,
     IDEMPOTENCY_HIT_TOTAL,
     PARQUET_READ_DURATION_SECONDS,
-)
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.load.warehouse_destination import (
-    complete_warehouse_child,
-    warehouse_child_for_job,
 )
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.messages import (
     ExportSignalMessage,
@@ -485,21 +486,6 @@ def _mark_job_completed(export_signal: ExportSignalMessage) -> None:
     # run inside an atomic block since it can drop the connection mid-transaction.
     close_old_connections()
 
-    # When the run fans out to several destinations, the warehouse is one of them: finalize its
-    # own child and let whichever destination finishes last close the run. The sync lock is
-    # still released here, because Delta maintenance runs under it before the next extraction
-    # and must not race a load that is still in flight.
-    warehouse_child = warehouse_child_for_job(export_signal.job_id, export_signal.team_id)
-    if warehouse_child is not None:
-        complete_warehouse_child(
-            warehouse_child,
-            team_id=export_signal.team_id,
-            run_uuid=export_signal.run_uuid,
-        )
-        async_to_sync(finish_row_tracking)(export_signal.team_id, export_signal.schema_id)
-        _release_pipeline_lock_for_job(export_signal)
-        return
-
     # The Completed write and cursor promotion share one transaction so they commit together:
     # if promotion raises, the completion rolls back and the batch retries, never stranding a
     # terminal job with a stale cursor that a later append sync would re-extract past.
@@ -773,6 +759,39 @@ def process_message(
         _process_message_reported(message, export_signal, progress_callback, verify_ownership)
 
 
+def _process_external_destinations_only(
+    export_signal: "ExportSignalMessage",
+    verify_ownership: Callable[[], None] | None,
+) -> None:
+    """Deliver a batch for a run that writes to external destinations only.
+
+    Same lifecycle as any other run, minus everything Delta-specific. The batch is done when
+    every destination has taken it, and the final batch completes the job.
+    """
+    pending = [
+        destination
+        for destination in external_destinations_for(export_signal)
+        if not is_batch_already_processed(
+            export_signal.team_id,
+            export_signal.schema_id,
+            export_signal.run_uuid,
+            export_signal.batch_index,
+            destination_id=str(destination.id),
+        )
+    ]
+
+    deliver_batch_to_destinations(export_signal, pending)
+
+    if not export_signal.is_final_batch:
+        return
+
+    # Minutes may have passed, so re-check ownership before completion promotes the cursor.
+    if verify_ownership is not None:
+        verify_ownership()
+
+    _mark_job_completed(export_signal)
+
+
 def _process_message_reported(
     message: Any,
     export_signal: "ExportSignalMessage",
@@ -808,6 +827,12 @@ def _process_message_reported(
             is_first_sync=export_signal.is_first_ever_sync,
         )
 
+        if not warehouse_is_a_destination(export_signal):
+            # The customer asked for their data elsewhere and not here, so there is no delta
+            # write, no table to register and no post-import to run.
+            _process_external_destinations_only(export_signal, verify_ownership)
+            return
+
         already_processed = is_batch_already_processed(
             export_signal.team_id,
             export_signal.schema_id,
@@ -815,6 +840,27 @@ def _process_message_reported(
             export_signal.batch_index,
             delta_table_ref=delta_table_ref,
         )
+
+        # A batch is done only once every destination has taken it. Checking the warehouse
+        # alone would let a retry return early after Redshift failed, and Redshift would
+        # never receive the batch.
+        pending_destinations = [
+            destination
+            for destination in external_destinations_for(export_signal)
+            if not is_batch_already_processed(
+                export_signal.team_id,
+                export_signal.schema_id,
+                export_signal.run_uuid,
+                export_signal.batch_index,
+                destination_id=str(destination.id),
+            )
+        ]
+
+        if already_processed and pending_destinations:
+            # The warehouse has this batch but at least one destination does not, so deliver
+            # the rest without re-writing delta.
+            deliver_batch_to_destinations(export_signal, pending_destinations)
+            pending_destinations = []
 
         if already_processed and not export_signal.is_final_batch:
             IDEMPOTENCY_HIT_TOTAL.labels(team_id=team_id_str, schema_id=schema_id_str).inc()
@@ -1009,6 +1055,10 @@ def _process_message_reported(
             previous_file_uris=previous_file_uris,
             internal_schema=internal_schema,
         )
+
+        # Before the final batch may complete the run: every destination must have the batch.
+        # A failure here raises and the batch is retried, skipping whatever already landed.
+        deliver_batch_to_destinations(export_signal, pending_destinations)
 
         if export_signal.is_final_batch:
             logger.info(

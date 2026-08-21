@@ -177,7 +177,6 @@ rules:
                               |ExportedAsset
                               |ExportedRecording
                               |ExternalDataDestination
-                              |ExternalDataDestinationJob
                               |ExternalDataJob
                               |ExternalDataSchema
                               |ExternalDataSchemaDestination
@@ -324,11 +323,7 @@ rules:
                               |SingleSessionSummary
                               |SlackThreadTaskMapping
                               |SourceBatch
-                              |SourceBatchDestination
-                              |SourceBatchDestinationApply
-                              |SourceDestinationGroupLease
                               |SourceGroupLease
-                              |SourceRunDestination
                               |StreamlitApp
                               |Subscription
                               |SubscriptionDelivery
@@ -695,11 +690,7 @@ rules:
                         |SingleSessionSummary
                         |SlackThreadTaskMapping
                         |SourceBatch
-                        |SourceBatchDestination
-                        |SourceBatchDestinationApply
-                        |SourceDestinationGroupLease
                         |SourceGroupLease
-                        |SourceRunDestination
                         |StreamlitApp
                         |Subscription
                         |SubscriptionDelivery

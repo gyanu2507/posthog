@@ -14,18 +14,9 @@ from asgiref.sync import sync_to_async
 
 logger = structlog.get_logger(__name__)
 
-PARTITIONED_TABLES = [
-    "sourcebatch",
-    "sourcebatchstatus",
-    "sourcebatchdestination",
-    "sourcebatchdestinationstatus",
-]
+PARTITIONED_TABLES = ["sourcebatch", "sourcebatchstatus"]
 PARTITIONS_AHEAD = 7
 RETENTION_DAYS = 7
-
-# Unpartitioned destination bookkeeping, pruned by row age on the same horizon. Both grow
-# with batch volume, and neither outlives the staged parquet a replay would need.
-AGE_PRUNED_TABLES = ["sourcebatchdestinationapply", "sourcerundestination"]
 
 # Deliberately not the lock-takeover sentinel — that string has special
 # downstream semantics in the dead-job gate.
@@ -112,8 +103,6 @@ async def manage_warehouse_sources_queue_partitions() -> dict:
                         errors.append(f"Failed to drop {partition_name}: {e}")
                         logger.exception("Failed to drop partition", partition=partition_name)
 
-        _prune_age_pruned_tables(conn, cutoff, errors)
-
         _verify_partitions(conn, today, errors)
 
     s3_deleted = _cleanup_old_s3_extractions(today, errors)
@@ -139,26 +128,6 @@ async def manage_warehouse_sources_queue_partitions() -> dict:
         "errors": result.errors,
         "success": result.success,
     }
-
-
-def _prune_age_pruned_tables(conn: psycopg.Connection, cutoff: date, errors: list[str]) -> None:
-    """Delete rows older than the retention cutoff from the unpartitioned destination tables.
-
-    Deleted in bounded batches so one long-running statement never holds a transaction open
-    across the whole table.
-    """
-    for table in AGE_PRUNED_TABLES:
-        try:
-            while True:
-                deleted = conn.execute(
-                    f"DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} WHERE created_at < %s LIMIT 10000)",
-                    [cutoff],
-                ).rowcount
-                if not deleted:
-                    break
-        except Exception as e:
-            errors.append(f"Failed to prune {table}: {e}")
-            logger.exception("Failed to prune age-pruned table", table=table)
 
 
 def _terminalize_stranded_runs(conn: psycopg.Connection, partition_name: str) -> None:

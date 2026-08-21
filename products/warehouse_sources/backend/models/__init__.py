@@ -4,7 +4,6 @@ from .credential import DataWarehouseCredential
 from .custom_oauth2_integration import CustomOAuth2Integration
 from .external_data_destination import (
     ExternalDataDestination,
-    ExternalDataDestinationJob,
     ExternalDataSchemaDestination,
     ExternalDataSourceDestination,
 )
@@ -20,7 +19,6 @@ __all__ = [
     "DataWarehouseCredential",
     "DataWarehouseTable",
     "ExternalDataDestination",
-    "ExternalDataDestinationJob",
     "ExternalDataJob",
     "ExternalDataSchema",
     "ExternalDataSchemaDestination",
