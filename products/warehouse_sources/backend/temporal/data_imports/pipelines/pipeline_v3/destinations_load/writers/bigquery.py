@@ -19,8 +19,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from asgiref.sync import sync_to_async
 from google.cloud import bigquery
-from google.oauth2 import service_account
 
+from posthog.models.integration.google_cloud import GoogleCloudServiceAccountIntegration
+
+from products.batch_exports.backend.temporal.destinations.bigquery_batch_export import BigQueryClient
 from products.warehouse_sources.backend.temporal.data_imports.destinations.contracts import (
     BatchWriteOutcome,
     DestinationBatchContext,
@@ -51,6 +53,12 @@ class BigQueryDestinationWriter:
         self._project: str = config.get("project") or config.get("project_id") or ""
 
     def _get_client(self) -> bigquery.Client:
+        """The underlying BigQuery client, resolved the way the batch export resolves it.
+
+        `from_service_account_integration` also covers the case where the integration holds no
+        key and PostHog impersonates the service account instead, which hand-building the
+        credentials from `sensitive_config` does not.
+        """
         if self._client is not None:
             return self._client
 
@@ -60,17 +68,10 @@ class BigQueryDestinationWriter:
         from posthog.models.integration import Integration  # noqa: PLC0415 — avoids a model import cycle
 
         integration = Integration.objects.get(id=self._ctx.integration_id, team_id=self._ctx.team_id)
-        info = {
-            "type": "service_account",
-            "project_id": integration.config.get("project_id"),
-            "private_key": integration.sensitive_config.get("private_key"),
-            "private_key_id": integration.sensitive_config.get("private_key_id"),
-            "client_email": integration.config.get("service_account_email"),
-            "token_uri": integration.sensitive_config.get("token_uri") or "https://oauth2.googleapis.com/token",
-        }
-        credentials = service_account.Credentials.from_service_account_info(info)
-        self._project = self._project or (integration.config.get("project_id") or "")
-        self._client = bigquery.Client(project=self._project, credentials=credentials)
+        client = BigQueryClient.from_service_account_integration(GoogleCloudServiceAccountIntegration(integration))
+
+        self._client = client.sync_client
+        self._project = self._project or self._client.project or ""
         return self._client
 
     def _table_ref(self, table: str) -> str:
@@ -89,16 +90,24 @@ class BigQueryDestinationWriter:
     async def write_batch(
         self, batches: AsyncIterator[pa.RecordBatch], ctx: DestinationBatchContext
     ) -> BatchWriteOutcome:
+        rows_written = 0
+        chunk = 0
+
+        async for record_batch in batches:
+            if record_batch.num_rows == 0:
+                continue
+            # One load job per record batch. Collecting the whole staged batch first would hold
+            # ~200 MiB of Arrow plus its parquet copy in memory, per destination.
+            rows_written += await self._write_one(record_batch, ctx, chunk)
+            chunk += 1
+
+        return BatchWriteOutcome(rows_written=rows_written)
+
+    async def _write_one(self, record_batch: pa.RecordBatch, ctx: DestinationBatchContext, chunk: int) -> int:
         run = ctx.run
         full_refresh = run.is_full_refresh
-
-        collected: list[pa.RecordBatch] = []
-        async for batch in batches:
-            collected.append(batch)
-        if not collected:
-            return BatchWriteOutcome(rows_written=0)
-
-        table = pa.Table.from_batches(collected)
+        # pq.write_table needs a Table, and one record batch is one load job.
+        table = pa.Table.from_batches([record_batch])
 
         def write() -> int:
             client = self._get_client()
@@ -107,16 +116,18 @@ class BigQueryDestinationWriter:
                 staging = staging_table_name(run)
                 # Batch 0 truncates so a re-run of the whole batch sequence starts clean; later
                 # batches append. Re-applying one batch is covered by the apply marker.
+                # Only the very first chunk of the very first batch truncates; every later
+                # chunk appends, or it would wipe what the chunk before it just loaded.
                 disposition = (
                     bigquery.WriteDisposition.WRITE_TRUNCATE
-                    if ctx.batch_index == 0
+                    if ctx.batch_index == 0 and chunk == 0
                     else bigquery.WriteDisposition.WRITE_APPEND
                 )
                 self._load(client, staging, table, disposition)
                 return table.num_rows
 
             if run.is_incremental and run.primary_keys:
-                temp = f"{run.table_name}__ph_tmp_{run.run_uuid.replace('-', '')[:8]}_{ctx.batch_index}"
+                temp = f"{run.table_name}__ph_tmp_{run.run_uuid.replace('-', '')[:8]}_{ctx.batch_index}_{chunk}"
                 self._load(client, temp, table, bigquery.WriteDisposition.WRITE_TRUNCATE)
                 self._merge(client, run.table_name, temp, list(table.schema.names), list(run.primary_keys))
                 client.delete_table(self._table_ref(temp), not_found_ok=True)
@@ -125,8 +136,7 @@ class BigQueryDestinationWriter:
             self._load(client, run.table_name, table, bigquery.WriteDisposition.WRITE_APPEND)
             return table.num_rows
 
-        rows_written = await sync_to_async(write, thread_sensitive=False)()
-        return BatchWriteOutcome(rows_written=rows_written)
+        return await sync_to_async(write, thread_sensitive=False)()
 
     def _load(self, client: bigquery.Client, table: str, data: pa.Table, disposition: str) -> None:
         """Load an Arrow table as parquet, letting BigQuery derive and evolve the schema."""
