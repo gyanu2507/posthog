@@ -9,6 +9,7 @@ import {
   Skeleton,
   Spinner,
 } from "@posthog/quill";
+import type { SignalReport } from "@posthog/shared/types";
 import { ReportRow } from "@posthog/ui/features/canvas/components/ReportRow";
 import {
   type ChannelReportsFilters,
@@ -39,6 +40,7 @@ export function ChannelReportsSection({
   const openReport = useOpenInboxReport();
   const {
     reports,
+    sections,
     isLoading,
     isError,
     fetchNextPage,
@@ -128,22 +130,43 @@ export function ChannelReportsSection({
         </Empty>
       );
     }
+    // In the default browse state the most important actionable reports pin
+    // above a divider (priority-first); the stream below stays chronological.
+    // Any active filter collapses back to one plain list (`needsAttention` is
+    // empty then), so this renders both shapes.
+    const { needsAttention, rest } = sections;
+    const row = (report: SignalReport) => (
+      <ReportRow
+        key={report.id}
+        report={report}
+        isActive={report.id === activeReportId}
+        onOpen={openReport}
+      />
+    );
     return (
       <div className="flex flex-col gap-px px-2 pt-1 pb-2">
-        {reports.map((report) => (
-          <ReportRow
-            key={report.id}
-            report={report}
-            isActive={report.id === activeReportId}
-            onOpen={openReport}
-          />
-        ))}
+        {needsAttention.length > 0 && (
+          <>
+            <div className="px-1.5 pt-1 pb-0.5 font-medium text-[11px] text-(--gray-10)">
+              Needs attention
+            </div>
+            {needsAttention.map(row)}
+            {rest.length > 0 && (
+              <div
+                aria-hidden
+                className="mx-1.5 my-1.5 border-(--gray-5) border-t"
+              />
+            )}
+          </>
+        )}
+        {rest.map(row)}
       </div>
     );
   }, [
     isLoading,
     isError,
     reports,
+    sections,
     activeReportId,
     openReport,
     filtersActive,
