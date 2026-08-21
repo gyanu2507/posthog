@@ -1,44 +1,34 @@
 import type { SignalReport } from "@posthog/shared/types";
 
 /**
- * The global reports inbox shows every live report in two sections: what needs
- * a decision from a person, and what is being watched (the agent still
- * working, or findings filed for awareness). Resolved and archived reports
- * come from a separate fetch and sit behind their own collapsed section.
+ * The global reports inbox shows every live report in two sections. The
+ * boundary is deliberately a server-countable dimension — report status —
+ * because the section headers and nav badges are server-side count queries,
+ * and a boundary the API can't filter on (actionability, PR-merged state)
+ * produces headline numbers no query can verify.
  */
 export interface InboxReportSections {
-  /** Waiting on a person: ready to act, a PR to review, stuck, or failed. */
+  /** Ready: research done, a person decides — act, review the PR, or archive. */
   decision: SignalReport[];
-  /** Being watched: runs in flight, and findings with nothing to decide. */
+  /** Still moving or stuck: running, queued, waiting on input, failed. */
   monitoring: SignalReport[];
 }
 
 /**
- * Whether a report is asking for a decision. An open PR outranks everything
- * (review is a decision even while the run is still moving); a merged one is
- * history, and the report classifies by its own state. A ready report only
- * asks when it is actionable and not already handled elsewhere — otherwise it
- * is an observation, which is monitoring.
+ * Whether a report is in the "Needs a decision" section: exactly the `ready`
+ * status. Archiving an FYI is a decision too, so ready-but-not-actionable
+ * reports stay here (a row-level hint conveys that) rather than defining a
+ * section boundary counts can't reproduce.
  */
 export function reportNeedsDecision(report: SignalReport): boolean {
-  if (report.implementation_pr_url && !report.implementation_pr_merged) {
-    return true;
-  }
-  if (report.status === "pending_input" || report.status === "failed") {
-    return true;
-  }
-  return (
-    report.status === "ready" &&
-    !report.already_addressed &&
-    report.actionability !== "not_actionable"
-  );
+  return report.status === "ready";
 }
 
 /**
  * Partition the loaded list into the two sections, preserving its order. The
  * list arrives sorted by the user's own sort (applied server-side by the
- * filter bar), and every number on the page is derived from this one list —
- * a second sort or a second query is how counts start disagreeing.
+ * filter bar); section totals come from server count queries, not from this
+ * partition — these arrays only feed the rendered rows.
  */
 export function partitionInboxReports(
   reports: SignalReport[],

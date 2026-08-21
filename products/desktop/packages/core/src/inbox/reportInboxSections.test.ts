@@ -20,47 +20,28 @@ function report(overrides: Partial<SignalReport>): SignalReport {
 
 describe("reportInboxSections", () => {
   it.each([
-    // A ready observation with nothing to decide is monitoring, not a decision.
-    [{ status: "ready", actionability: "not_actionable" }, "monitoring"],
-    [{ status: "ready", already_addressed: true }, "monitoring"],
+    // The boundary is status alone — the one dimension server counts can
+    // reproduce. Ready is a decision whatever else the report carries...
     [{ status: "ready" }, "decision"],
-    [{ status: "pending_input" }, "decision"],
-    [{ status: "failed" }, "decision"],
-    // A PR to review is a decision even mid-run or on an FYI report.
+    [{ status: "ready", actionability: "not_actionable" }, "decision"],
+    [{ status: "ready", already_addressed: true }, "decision"],
+    [
+      {
+        status: "ready",
+        implementation_pr_url: "https://gh/pr/9",
+        implementation_pr_merged: true,
+      },
+      "decision",
+    ],
+    // ...and anything not ready is monitoring, even mid-run with an open PR.
+    [{ status: "pending_input" }, "monitoring"],
+    [{ status: "failed" }, "monitoring"],
+    [{ status: "in_progress" }, "monitoring"],
     [
       { status: "in_progress", implementation_pr_url: "https://gh/pr/1" },
-      "decision",
-    ],
-    // A merged PR is history: the report classifies by its own state, so a
-    // still-ready report reads as a decision again, and a running one as
-    // monitoring — never as "review".
-    [
-      {
-        status: "ready",
-        implementation_pr_url: "https://gh/pr/9",
-        implementation_pr_merged: true,
-      },
-      "decision",
-    ],
-    [
-      {
-        status: "in_progress",
-        implementation_pr_url: "https://gh/pr/9",
-        implementation_pr_merged: true,
-      },
       "monitoring",
     ],
-    [
-      {
-        status: "ready",
-        actionability: "not_actionable",
-        implementation_pr_url: "https://gh/pr/2",
-      },
-      "decision",
-    ],
-    [{ status: "potential" }, "monitoring"],
     [{ status: "candidate" }, "monitoring"],
-    [{ status: "in_progress" }, "monitoring"],
   ] as const)("%j lands in %s", (overrides, section) => {
     const sections = partitionInboxReports([
       report(overrides as Partial<SignalReport>),

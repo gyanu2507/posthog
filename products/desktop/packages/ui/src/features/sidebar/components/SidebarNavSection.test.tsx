@@ -75,6 +75,9 @@ vi.mock("@posthog/ui/features/command-center/commandCenterStore", () => ({
     selector: (s: { cells: (string | null)[] }) => unknown,
   ) => selector({ cells: [] }),
 }));
+vi.mock("@posthog/ui/features/inbox/hooks/useInboxDecisionCount", () => ({
+  useInboxDecisionCount: () => 0,
+}));
 vi.mock("@posthog/ui/features/inbox/hooks/useInboxAllReports", () => ({
   useInboxAllReports: () => ({ scopedReports: [], counts: { pulls: 0 } }),
 }));

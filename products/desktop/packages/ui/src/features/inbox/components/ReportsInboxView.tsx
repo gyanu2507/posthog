@@ -33,6 +33,7 @@ import { InboxScopeSelect } from "@posthog/ui/features/inbox/components/InboxSco
 import { InboxSearchFilterBar } from "@posthog/ui/features/inbox/components/InboxSearchFilterBar";
 import { SuggestedReviewerAvatarStack } from "@posthog/ui/features/inbox/components/SuggestedReviewerAvatarStack";
 import { useInboxReportDismissAction } from "@posthog/ui/features/inbox/hooks/useInboxReportDismissAction";
+import { useInboxSectionCounts } from "@posthog/ui/features/inbox/hooks/useInboxSectionCounts";
 import { SignalReportPriorityBadge } from "@posthog/ui/features/inbox/components/utils/SignalReportPriorityBadge";
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { useInboxReportsInfinite } from "@posthog/ui/features/inbox/hooks/useInboxReports";
@@ -68,26 +69,28 @@ export function ReportsInboxView() {
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
+    searchQuery,
   } = useInboxAllReports({ statusFilter: REPORTS_INBOX_STATUS_FILTER });
 
   const sections = useMemo(
     () => partitionInboxReports(scopedReports),
     [scopedReports],
   );
-  const decisionPrCount = useMemo(
-    () =>
-      sections.decision.filter(
-        (r) => r.implementation_pr_url && !r.implementation_pr_merged,
-      ).length,
-    [sections.decision],
-  );
+  // Section totals are server-side count queries — at this dataset's size the
+  // loaded rows are always a window, so nothing user-facing counts them.
+  // Search is the one exception: it's a client-side title match, so a
+  // searching page counts its matching rows instead.
+  const serverCounts = useInboxSectionCounts();
+  const searchActive = searchQuery.trim().length > 0;
+  const decisionCount = searchActive
+    ? sections.decision.length
+    : serverCounts.decision;
+  const monitoringCount = searchActive
+    ? sections.monitoring.length
+    : serverCounts.monitoring;
 
-  // Load the whole scoped list rather than counting a window of it: every
-  // number on this page (and the nav badge, which reads the same query) is
-  // derived from these rows, so an unloaded page is a wrong count. Capped so
-  // an enormous project degrades to explicit "+" counts instead of unbounded
-  // fetching.
-  const countsComplete = !hasNextPage;
+  // Keep paging rows in (capped) so the sections have bodies to render —
+  // counts never depend on this; they come from the server queries above.
   useEffect(() => {
     if (
       !hasNextPage ||
@@ -106,11 +109,11 @@ export function ReportsInboxView() {
     fetchNextPage,
   ]);
 
-  const isEmpty =
-    !isLoading &&
-    sections.decision.length === 0 &&
-    sections.monitoring.length === 0 &&
-    !hasNextPage;
+  const isEmpty = searchActive
+    ? sections.decision.length === 0 && sections.monitoring.length === 0
+    : !serverCounts.isLoading &&
+      serverCounts.decision === 0 &&
+      serverCounts.monitoring === 0;
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-4">
@@ -164,10 +167,10 @@ export function ReportsInboxView() {
           <InboxSection
             title="Needs a decision"
             reports={sections.decision}
-            countsComplete={countsComplete}
+            count={decisionCount}
             caption={
-              decisionPrCount > 0
-                ? `${decisionPrCount} with a PR to review`
+              !searchActive && serverCounts.decisionPr > 0
+                ? `${serverCounts.decisionPr} with a PR to review`
                 : undefined
             }
             emptyNote="Nothing waiting on you."
@@ -175,7 +178,7 @@ export function ReportsInboxView() {
           <InboxSection
             title="Monitoring"
             reports={sections.monitoring}
-            countsComplete={countsComplete}
+            count={monitoringCount}
           />
           <ResolvedSection />
           {isFetchingNextPage && (
@@ -195,37 +198,35 @@ export function ReportsInboxView() {
 function InboxSection({
   title,
   reports,
-  countsComplete = true,
+  count,
   caption,
   emptyNote,
 }: {
   title: string;
+  /** The loaded rows to render — a window; never what the header counts. */
   reports: SignalReport[];
-  /** False while pages are still loading (or capped): the count wears a "+". */
-  countsComplete?: boolean;
+  /** The section's true total, from a server-side count query. */
+  count: number;
   /** Secondary breakdown shown after the count (e.g. "37 with a PR to review"). */
   caption?: string;
   emptyNote?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (reports.length === 0 && !emptyNote) return null;
+  if (count === 0 && reports.length === 0 && !emptyNote) return null;
   const visible = expanded ? reports : reports.slice(0, SECTION_PREVIEW_LIMIT);
   const hidden = reports.length - visible.length;
   return (
     <section className="flex flex-col gap-1.5">
       <h2 className="flex items-baseline gap-2 border-(--gray-5) border-b pb-1 font-medium text-[11px] text-gray-10 uppercase tracking-wide">
         {title}
-        <span className="tabular-nums">
-          ({reports.length}
-          {countsComplete ? "" : "+"})
-        </span>
+        <span className="tabular-nums">({count})</span>
         {caption && (
           <span className="font-normal normal-case tracking-normal">
             · {caption}
           </span>
         )}
       </h2>
-      {reports.length === 0 ? (
+      {count === 0 && reports.length === 0 ? (
         <p className="px-1 py-2 text-[12.5px] text-gray-10">{emptyNote}</p>
       ) : (
         <div className="flex flex-col gap-1">
