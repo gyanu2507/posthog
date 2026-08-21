@@ -3,6 +3,7 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
@@ -12,6 +13,7 @@ import posthoganalytics
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from posthog.dataclasses import frozen
 from posthog.models.user_integration import ReauthorizationRequired
 from posthog.temporal.common.utils import asyncify
 
@@ -140,13 +142,15 @@ class CreateSandboxForRepositoryInput:
     prepared: PrepareSandboxForRepositoryOutput
 
 
-@dataclass
+@frozen
 class CreateSandboxForRepositoryOutput:
     sandbox_id: str
     sandbox_url: str
     connect_token: str | None
     used_snapshot: bool | None = None
     create_ms: int | None = None
+    jwt_kid: str | None = None
+    ttl_expires_at: str | None = None
 
 
 @dataclass
@@ -214,6 +218,15 @@ class InjectFreshTokensOnResumeInput:
     context: TaskProcessingContext
     sandbox_id: str
     repository: str | None
+
+
+@frozen
+class RestoreSandboxConnectionStateInput:
+    run_id: str
+    sandbox_id: str
+    sandbox_url: str
+    connect_token: str | None
+    jwt_kid: str | None = None
 
 
 @dataclass
@@ -802,10 +815,11 @@ def _create_sandbox_for_repository(input: CreateSandboxForRepositoryInput) -> Cr
         credentials = sandbox.get_connect_credentials()
 
         try:
+            jwt_kid = get_primary_sandbox_jwt_kid()
             sandbox_state = {
                 "sandbox_id": sandbox.id,
                 "sandbox_url": credentials.url,
-                SANDBOX_JWT_STATE_KID_KEY: get_primary_sandbox_jwt_kid(),
+                SANDBOX_JWT_STATE_KID_KEY: jwt_kid,
             }
             if credentials.token:
                 sandbox_state["sandbox_connect_token"] = credentials.token
@@ -838,6 +852,8 @@ def _create_sandbox_for_repository(input: CreateSandboxForRepositoryInput) -> Cr
             connect_token=credentials.token,
             used_snapshot=actual_used_snapshot,
             create_ms=create_ms,
+            ttl_expires_at=(sandbox_created_at + timedelta(seconds=sandbox.config.ttl_seconds)).isoformat(),
+            jwt_kid=jwt_kid,
         )
 
 
@@ -1053,6 +1069,36 @@ def checkout_branch_in_sandbox(input: CheckoutBranchInSandboxInput) -> CheckoutB
         _prepare_posthog_desktop_cloud_task(ctx, sandbox, input.repository)
 
         return CheckoutBranchInSandboxOutput(checkout_ms=checkout_timer.elapsed_ms)
+
+
+@activity.defn
+@asyncify
+def restore_sandbox_connection_state(input: RestoreSandboxConnectionStateInput) -> None:
+    """Point the run's persisted connection state back at a sandbox it already had.
+
+    Creating a replacement sandbox publishes its connection details immediately, so an
+    abandoned replacement would otherwise leave every later follow-up addressing a sandbox
+    that no longer exists while the original is still serving the run.
+    """
+    updates: dict[str, Any] = {
+        "sandbox_id": input.sandbox_id,
+        "sandbox_url": input.sandbox_url,
+    }
+    remove_keys = [] if input.connect_token else ["sandbox_connect_token"]
+    if input.connect_token:
+        updates["sandbox_connect_token"] = input.connect_token
+    # The signing key id belongs to the same set as the handle it authenticates —
+    # clear_sandbox_connection_state_atomic drops all four together. Leaving the
+    # replacement's behind would sign tokens the restored sandbox does not trust.
+    if input.jwt_kid:
+        updates[SANDBOX_JWT_STATE_KID_KEY] = input.jwt_kid
+    else:
+        remove_keys.append(SANDBOX_JWT_STATE_KID_KEY)
+    TaskRun.update_state_atomic(input.run_id, updates=updates, remove_keys=remove_keys)
+    activity.logger.info(
+        "restored sandbox connection state",
+        extra={"run_id": input.run_id, "sandbox_id": input.sandbox_id},
+    )
 
 
 @activity.defn

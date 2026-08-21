@@ -132,6 +132,7 @@ const agentErrorClassificationSchema = z.enum([
   "upstream_connection_error",
   "upstream_timeout",
   "upstream_provider_failure",
+  "turn_ended_without_response",
   "agent_error",
 ]) satisfies z.ZodType<AgentErrorClassification>;
 
