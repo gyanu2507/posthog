@@ -16,8 +16,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from django.db import close_old_connections
-
 import structlog
 from asgiref.sync import async_to_sync
 
@@ -118,9 +116,11 @@ def deliver_batch_to_destinations(
 
     Returns the number of destinations written. Raises `DestinationDeliveryError` on the
     first failure, which fails the batch and leaves it to be retried.
-    """
-    close_old_connections()
 
+    Connection hygiene belongs to the caller: `close_old_connections` here would drop the
+    connection a caller's transaction is running in, which is what the load consumer already
+    does once per message before it gets this far.
+    """
     pending = list(destinations if destinations is not None else external_destinations_for(export_signal))
     if not pending:
         return 0
