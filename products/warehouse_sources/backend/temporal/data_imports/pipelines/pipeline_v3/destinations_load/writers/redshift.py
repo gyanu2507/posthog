@@ -2,8 +2,8 @@
 
 Redshift speaks the Postgres wire protocol, so this builds on the Postgres writer and on batch
 exports' `RedshiftClient`, which is itself a `PostgreSQLClient`. A Redshift destination is
-backed by a `postgresql` integration, because the `aws-redshift` integration kind holds AWS
-keys rather than the cluster's host and login.
+backed by an `aws-redshift` integration, which is a `PostgreSQLServerIntegration` and so
+carries the cluster's host, user and password.
 
 Three things genuinely differ and are overridden here:
 
@@ -15,8 +15,8 @@ Three things genuinely differ and are overridden here:
 `RedshiftClient.acopy_from_s3_bucket` would be the fast path, since a run's batches are
 already parquet in S3. It is not usable as-is: it needs a MANIFEST file and an IAM role or AWS
 credentials that let the customer's cluster read the bucket the parquet sits in, which is a
-PostHog bucket. Batch exports solve that by staging into a customer-owned bucket first. Wiring
-that up here is follow-up work, and it is what the `aws-redshift` integration kind is for.
+PostHog bucket. Batch exports solve that by staging into a customer-owned bucket first.
+Wiring that up here is follow-up work.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from typing import ClassVar
 import pyarrow as pa
 from psycopg import sql
 
-from posthog.models.integration.postgres import PostgreSQLServerIntegration
+from posthog.models.integration.postgres import RedshiftIntegration
 
 from products.batch_exports.backend.temporal.destinations.postgres_batch_export import PostgreSQLClient
 from products.batch_exports.backend.temporal.destinations.redshift_batch_export import RedshiftClient
@@ -88,7 +88,7 @@ class RedshiftDestinationWriter(PostgresDestinationWriter):
     runs_post_load: ClassVar[bool] = False
 
     def _client_from_integration(self, integration) -> PostgreSQLClient:
-        return RedshiftClient.from_inputs(PostgreSQLServerIntegration(integration), database=self._database)
+        return RedshiftClient.from_inputs(RedshiftIntegration(integration), database=self._database)
 
     def _column_type(self, arrow_type: pa.DataType) -> str:
         return redshift_type_for(arrow_type)

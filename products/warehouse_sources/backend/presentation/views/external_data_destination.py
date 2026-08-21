@@ -14,9 +14,9 @@ from products.warehouse_sources.backend.facade.models import ExternalDataDestina
 # Which Integration kind holds the credentials for each destination type. A type absent from
 # this map needs no integration; the PostHog warehouse is the only such type today.
 DESTINATION_INTEGRATION_KINDS: dict[str, tuple[str, ...]] = {
-    # Redshift is Postgres-wire, and the aws-redshift kind holds AWS keys rather than the
-    # cluster's host and login, so the connection comes from a postgresql integration.
-    ExternalDataDestination.Type.REDSHIFT: (Integration.IntegrationKind.POSTGRESQL,),
+    # Redshift is Postgres-wire, and the aws-redshift kind is itself a PostgreSQL-server
+    # integration, so it carries the cluster's host, user and password.
+    ExternalDataDestination.Type.REDSHIFT: (Integration.IntegrationKind.AWS_REDSHIFT,),
     ExternalDataDestination.Type.SNOWFLAKE: (Integration.IntegrationKind.SNOWFLAKE,),
     ExternalDataDestination.Type.BIGQUERY: (Integration.IntegrationKind.GOOGLE_CLOUD_SERVICE_ACCOUNT,),
     ExternalDataDestination.Type.POSTGRES: (Integration.IntegrationKind.POSTGRESQL,),

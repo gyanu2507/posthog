@@ -33,7 +33,7 @@ import pyarrow as pa
 from asgiref.sync import sync_to_async
 from psycopg import sql
 
-from posthog.models.integration.postgres import PostgreSQLServerIntegration
+from posthog.models.integration.postgres import PostgreSQLIntegration
 
 from products.batch_exports.backend.temporal.destinations.postgres_batch_export import Fields, PostgreSQLClient
 from products.batch_exports.backend.temporal.pipeline.transformer import CSVStreamTransformer
@@ -83,7 +83,7 @@ class PostgresDestinationWriter:
         # `from_inputs` accepts anything exposing credentials/authority/tls, which the
         # integration wrapper does, so the batch export path and this one resolve credentials
         # identically.
-        return PostgreSQLClient.from_inputs(PostgreSQLServerIntegration(integration), database=self._database)
+        return PostgreSQLClient.from_inputs(PostgreSQLIntegration(integration), database=self._database)
 
     async def _make_client(self) -> PostgreSQLClient:
         if self._ctx.integration_id is None:
