@@ -58,7 +58,6 @@ import { useChannelItems } from "@posthog/ui/features/canvas/hooks/useChannelIte
 import {
   type ChannelReportsFilters,
   DEFAULT_CHANNEL_REPORTS_FILTERS,
-  EMPTY_CHANNEL_REPORTS_FILTERS,
   useChannelReports,
 } from "@posthog/ui/features/canvas/hooks/useChannelReports";
 import { useChannels } from "@posthog/ui/features/canvas/hooks/useChannels";
@@ -103,7 +102,8 @@ type ChannelTab = ChannelItemModel["kind"] | "report";
 const CHANNEL_TABS: readonly {
   value: ChannelTab;
   label: string;
-  badge?: boolean;
+  /** Count shown on the inactive tab; the number of decisions waiting. */
+  badge?: number;
 }[] = [
   { value: "task", label: "Sessions" },
   { value: "canvas", label: "Canvases" },
@@ -130,7 +130,7 @@ function RecentSectionHeader({
   filterControls,
 }: {
   tab: ChannelTab;
-  tabs: readonly { value: ChannelTab; label: string; badge?: boolean }[];
+  tabs: readonly { value: ChannelTab; label: string; badge?: number }[];
   onTabChange: (tab: ChannelTab) => void;
   searchOpen: boolean;
   onToggleSearch: () => void;
@@ -174,9 +174,9 @@ function RecentSectionHeader({
             className="quill-tabs-fill h-auto min-w-0 gap-0.5 overflow-hidden border-b-0"
           >
             {/* When space runs out, labels truncate instead of sliding under
-                the search button. The dot says the space has reports at all —
-                no counter — and only on an inactive tab, where the list isn't
-                already answering the question. */}
+                the search button. The count is the working set's own decision
+                count — one number, same population as the list — and only on
+                an inactive tab, where the list isn't already answering it. */}
             {tabs.map(({ value, label, badge }) => (
               <TabsTrigger
                 key={value}
@@ -184,12 +184,13 @@ function RecentSectionHeader({
                 className="min-w-0 rounded-sm px-1 py-0.5 text-[13px]"
               >
                 <span className="truncate">{label}</span>
-                {badge && value !== tab && (
+                {badge != null && badge > 0 && value !== tab && (
                   <span
-                    className="ml-1 size-1.5 shrink-0 rounded-full bg-(--amber-9)"
-                    role="img"
-                    aria-label="Has reports"
-                  />
+                    className="ml-1 shrink-0 rounded-full bg-(--amber-9) px-1 font-semibold text-[9.5px] text-white tabular-nums leading-[13px]"
+                    title={`${badge} report${badge === 1 ? "" : "s"} waiting on a decision`}
+                  >
+                    {badge}
+                  </span>
                 )}
               </TabsTrigger>
             ))}
@@ -381,12 +382,23 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
     !isGeneralChannel({ channel_type: channel.channelType, name: channel.name })
       ? channelReportView(channelId)
       : generalReportView();
-  // Shares the section's query key, so the dot costs no extra fetch.
-  const { hasReports } = useChannelReports(
-    reportView,
-    EMPTY_CHANNEL_REPORTS_FILTERS,
-    { enabled: reportsEnabled },
+  // The badge counts what the tab shows: same hook, same filters (minus
+  // transient search and status/priority excursions), same eligibility. A
+  // badge computed from a different population than the list is a bug the
+  // reader can see.
+  const badgeFilters = useMemo(
+    () => ({
+      ...reportFilters,
+      search: "",
+      status: "all" as const,
+      priorities: [],
+    }),
+    [reportFilters],
   );
+  const { workingSet } = useChannelReports(reportView, badgeFilters, {
+    enabled: reportsEnabled,
+  });
+  const reportDecisionCount = workingSet?.decisionCount ?? 0;
   const visibleTabs = useMemo(
     () =>
       reportsEnabled
@@ -396,12 +408,12 @@ export function ChannelSidebar({ channelId }: { channelId: string }) {
             {
               value: "report" as ChannelTab,
               label: "Reports",
-              badge: hasReports,
+              badge: reportDecisionCount,
             },
             ...CHANNEL_TABS,
           ]
         : CHANNEL_TABS,
-    [reportsEnabled, hasReports],
+    [reportsEnabled, reportDecisionCount],
   );
   // The tab is the list, so everything below it — the filters, the empty state,
   // the sections — is about one kind of thing at a time.

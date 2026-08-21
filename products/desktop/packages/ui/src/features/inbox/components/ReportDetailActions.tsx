@@ -105,7 +105,7 @@ export function ReportDetailActions({
         title="Chat with the agent about this report"
       >
         <ChatCircleIcon size={12} />
-        Discuss
+        Chat with this report
       </Button>
 
       {canvasActionEnabled && (
@@ -127,7 +127,7 @@ export function ReportDetailActions({
                 title="Have the agent build a canvas from this report"
               >
                 {isCreatingCanvas ? <Spinner /> : <ShapesIcon size={12} />}
-                Canvas
+                Create canvas…
               </Button>
             }
           />

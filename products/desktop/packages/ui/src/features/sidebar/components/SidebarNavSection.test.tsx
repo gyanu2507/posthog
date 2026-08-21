@@ -76,7 +76,7 @@ vi.mock("@posthog/ui/features/command-center/commandCenterStore", () => ({
   ) => selector({ cells: [] }),
 }));
 vi.mock("@posthog/ui/features/inbox/hooks/useInboxAllReports", () => ({
-  useInboxAllReports: () => ({ counts: { pulls: 0 } }),
+  useInboxAllReports: () => ({ scopedReports: [], counts: { pulls: 0 } }),
 }));
 vi.mock("@posthog/ui/features/tasks/useTasks", () => ({
   useTasks: () => ({ data: [] }),

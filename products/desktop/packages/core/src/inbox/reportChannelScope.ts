@@ -147,6 +147,11 @@ const PRIORITY_RANK: Record<SignalReportPriority, number> = {
 export interface SidebarWorkingSet {
   /** Untriaged reports waiting on a person, priority-ordered, hard-capped. */
   reports: SignalReport[];
+  /**
+   * Every report waiting on a decision, before the display cap — the one
+   * number the tab badge shows, so badge and list can never disagree.
+   */
+  decisionCount: number;
   /** How many live reports the cap and the eligibility rule left out. */
   remainderCount: number;
 }
@@ -161,8 +166,8 @@ export interface SidebarWorkingSet {
 export function buildSidebarWorkingSet(
   orderedReports: SignalReport[],
 ): SidebarWorkingSet {
-  const reports = orderedReports
-    .filter(reportNeedsDecision)
+  const decisions = orderedReports.filter(reportNeedsDecision);
+  const reports = [...decisions]
     .sort((a, b) => {
       const aRank = a.priority
         ? PRIORITY_RANK[a.priority]
@@ -176,6 +181,7 @@ export function buildSidebarWorkingSet(
     .slice(0, SIDEBAR_WORKING_SET_LIMIT);
   return {
     reports,
+    decisionCount: decisions.length,
     remainderCount: orderedReports.length - reports.length,
   };
 }

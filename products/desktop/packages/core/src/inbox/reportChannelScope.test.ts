@@ -168,7 +168,7 @@ describe("reportChannelScope", () => {
 
 describe("buildSidebarWorkingSet", () => {
   it("keeps only decisions, priority-first, and counts everything else as remainder", () => {
-    const { reports, remainderCount } = buildSidebarWorkingSet([
+    const { reports, decisionCount, remainderCount } = buildSidebarWorkingSet([
       report({ id: "running", status: "in_progress" }),
       report({ id: "fyi", status: "ready", actionability: "not_actionable" }),
       report({ id: "p2", priority: "P2", updated_at: "2026-06-01T00:00:00Z" }),
@@ -176,6 +176,8 @@ describe("buildSidebarWorkingSet", () => {
       report({ id: "none", updated_at: "2026-06-09T00:00:00Z" }),
     ]);
     expect(reports.map((r) => r.id)).toEqual(["p0", "p2", "none"]);
+    // The badge number equals the rows shown whenever the cap isn't hit.
+    expect(decisionCount).toBe(3);
     expect(remainderCount).toBe(2);
   });
 
@@ -183,8 +185,11 @@ describe("buildSidebarWorkingSet", () => {
     const many = Array.from({ length: SIDEBAR_WORKING_SET_LIMIT + 4 }, (_, i) =>
       report({ id: `r${i}`, priority: "P2" }),
     );
-    const { reports, remainderCount } = buildSidebarWorkingSet(many);
+    const { reports, decisionCount, remainderCount } =
+      buildSidebarWorkingSet(many);
     expect(reports).toHaveLength(SIDEBAR_WORKING_SET_LIMIT);
+    // Past the cap the badge keeps counting decisions, not visible rows.
+    expect(decisionCount).toBe(SIDEBAR_WORKING_SET_LIMIT + 4);
     expect(remainderCount).toBe(4);
   });
 });

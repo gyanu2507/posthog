@@ -1,3 +1,4 @@
+import { reportNeedsDecision } from "@posthog/core/inbox/reportInboxSections";
 import { LOOPS_FLAG, PROJECT_BLUEBIRD_FLAG } from "@posthog/shared";
 import {
   ANALYTICS_EVENTS,
@@ -7,6 +8,7 @@ import { useCommandCenterActiveCount } from "@posthog/ui/features/command-center
 import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
 import { useReportsInboxEnabled } from "@posthog/ui/features/feature-flags/useReportsInboxEnabled";
+import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { openSettings } from "@posthog/ui/features/settings/hooks/useOpenSettings";
 import {
   CUSTOMIZABLE_NAV_ITEM_IDS,
@@ -28,7 +30,7 @@ import { track } from "@posthog/ui/shell/analytics";
 import { useCommandMenuStore } from "@posthog/ui/shell/commandMenuStore";
 import { Box, Flex } from "@radix-ui/themes";
 import { useRouterState } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useMemo } from "react";
 import { ActivityItem } from "./items/ActivityItem";
 import { CommandCenterItem } from "./items/CommandCenterItem";
 import { ConfigureItem } from "./items/ConfigureItem";
@@ -71,6 +73,16 @@ export function SidebarNavSection({
   // inbox disappears as a destination.
   const channelReportsEnabled = useChannelReportsEnabled();
   const reportsInboxEnabled = useReportsInboxEnabled();
+  // Same number, same predicate as the inbox's "Needs a decision" section —
+  // the sidebar mounts on every route, so its copy of the query polls slowly.
+  const { scopedReports: inboxReports } = useInboxAllReports({
+    ignoreFilters: true,
+    refetchIntervalMs: 60_000,
+  });
+  const inboxDecisionCount = useMemo(
+    () => inboxReports.filter(reportNeedsDecision).length,
+    [inboxReports],
+  );
   // When this section renders inside the Channels space, the destinations that
   // have a /website mirror stay in that space; everything else (and the whole
   // section in the Code space) uses the canonical routes. Inbox and New task
@@ -145,6 +157,7 @@ export function SidebarNavSection({
         depth={depth}
         isActive={isInboxActive}
         onClick={withNavTrack("inbox", navigateToInbox, depth)}
+        decisionCount={inboxDecisionCount}
       />
     ),
     "command-center": (depth) => (

@@ -17,7 +17,7 @@ vi.mock("@posthog/ui/features/feature-flags/useFeatureFlag", () => ({
   useFeatureFlag: () => false,
 }));
 vi.mock("@posthog/ui/features/inbox/hooks/useInboxAllReports", () => ({
-  useInboxAllReports: () => ({ counts: { pulls: 0 } }),
+  useInboxAllReports: () => ({ scopedReports: [], counts: { pulls: 0 } }),
 }));
 vi.mock("@posthog/ui/router/useAppView", () => ({
   useAppView: () => mocks.view,

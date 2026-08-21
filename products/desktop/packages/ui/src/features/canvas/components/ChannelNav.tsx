@@ -5,6 +5,7 @@ import {
   HouseSimple,
   Lightning,
 } from "@phosphor-icons/react";
+import { reportNeedsDecision } from "@posthog/core/inbox/reportInboxSections";
 import {
   Button,
   cn,
@@ -30,6 +31,7 @@ import { useCommandCenterActiveCount } from "@posthog/ui/features/command-center
 import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
 import { useReportsInboxEnabled } from "@posthog/ui/features/feature-flags/useReportsInboxEnabled";
+import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { openSettings } from "@posthog/ui/features/settings/hooks/useOpenSettings";
 import { CountBadge } from "@posthog/ui/primitives/CountBadge";
 import { LoopIcon } from "@posthog/ui/primitives/LoopIcon";
@@ -46,6 +48,7 @@ import {
   type ComponentPropsWithRef,
   type ReactElement,
   type ReactNode,
+  useMemo,
   useState,
 } from "react";
 import { ActivityHoverCard } from "./ActivityHoverCard";
@@ -190,6 +193,17 @@ export function ChannelNav() {
   const reportsInboxEnabled = useReportsInboxEnabled();
   const showInbox = !channelReportsEnabled || reportsInboxEnabled;
 
+  // The one number the badge means: reports waiting on a decision, the same
+  // predicate the inbox's "Needs a decision" section counts with.
+  const { scopedReports } = useInboxAllReports({
+    ignoreFilters: true,
+    refetchIntervalMs: 60_000,
+  });
+  const decisionCount = useMemo(
+    () => scopedReports.filter(reportNeedsDecision).length,
+    [scopedReports],
+  );
+
   const { unreadCount: unseenActivity } = useTaskActivity();
   const commandCenterCount = useCommandCenterActiveCount();
 
@@ -230,6 +244,9 @@ export function ChannelNav() {
             shortcut={formatHotkey(SHORTCUTS.INBOX)}
             isActive={isInbox}
             onClick={withTrack("inbox", navigateToInbox)}
+            badge={
+              <CountBadge count={decisionCount} className={ICON_BADGE_CLASS} />
+            }
           />
         )}
         <ActivityNavItem
