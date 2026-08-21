@@ -76,6 +76,7 @@ from products.warehouse_sources.backend.facade.models import (
 from products.warehouse_sources.backend.models.external_data_destination import (
     ExternalDataDestination,
     ExternalDataSourceDestination,
+    get_or_create_warehouse_destination,
 )
 from products.warehouse_sources.backend.models.external_table_definitions import external_tables
 from products.warehouse_sources.backend.models.oom_event import ExternalDataSchemaOOMEvent
@@ -5004,6 +5005,7 @@ async def _postgres_destination(team: Team, postgres_config: dict, connection) -
         },
         sensitive_config={"password": postgres_config["password"]},
     )
+
     def create() -> ExternalDataDestination:
         # The whole call runs in the thread: `for_team` queries, so building the manager in
         # the async context would raise SynchronousOnlyOperation before `create` is reached.
@@ -5034,6 +5036,7 @@ async def test_a_source_syncs_to_a_postgres_destination(
         pytest.skip("destinations only apply to pipeline_v3")
 
     destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    warehouse = await sync_to_async(get_or_create_warehouse_destination)(team.pk)
 
     await _run(
         team=team,
@@ -5042,7 +5045,7 @@ async def test_a_source_syncs_to_a_postgres_destination(
         source_type="Stripe",
         job_inputs=_STRIPE_JOB_INPUTS,
         mock_data_response=stripe_charge["data"],
-        destinations=[destination],
+        destinations=[warehouse, destination],
     )
 
     # The warehouse still has the rows, and so does the customer's Postgres.
@@ -5062,6 +5065,7 @@ async def test_a_run_with_a_destination_bills_for_both(
         pytest.skip("destinations only apply to pipeline_v3")
 
     destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    warehouse = await sync_to_async(get_or_create_warehouse_destination)(team.pk)
 
     await _run(
         team=team,
@@ -5070,14 +5074,14 @@ async def test_a_run_with_a_destination_bills_for_both(
         source_type="Stripe",
         job_inputs=_STRIPE_JOB_INPUTS,
         mock_data_response=stripe_charge["data"],
-        destinations=[destination],
+        destinations=[warehouse, destination],
     )
 
     run = await sync_to_async(ExternalDataJob.objects.filter(team_id=team.pk).order_by("-created_at").first)()
     assert run is not None
     # The warehouse and the Postgres destination, so rows bill twice over.
     assert run.destination_count == 2
-    assert sorted(run.destination_ids) == sorted([str(destination.id)])  # the warehouse is implicit
+    assert sorted(run.destination_ids) == sorted([str(warehouse.id), str(destination.id)])
 
 
 @pytest.mark.django_db(transaction=True)
@@ -5089,6 +5093,7 @@ async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating
         pytest.skip("destinations only apply to pipeline_v3")
 
     destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    warehouse = await sync_to_async(get_or_create_warehouse_destination)(team.pk)
     run_kwargs: dict[str, Any] = {
         "team": team,
         "schema_name": STRIPE_CHARGE_RESOURCE_NAME,
@@ -5096,7 +5101,7 @@ async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating
         "source_type": "Stripe",
         "job_inputs": _STRIPE_JOB_INPUTS,
         "mock_data_response": stripe_charge["data"],
-        "destinations": [destination],
+        "destinations": [warehouse, destination],
     }
 
     await _run(**run_kwargs)
@@ -5107,3 +5112,44 @@ async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating
 
     # Same source rows delivered twice must not double up at the destination.
     assert after_second == after_first
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_source_can_sync_to_a_destination_and_not_to_posthog(
+    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+):
+    """Selecting destinations replaces the default rather than adding to it.
+
+    A source linked only to Postgres does not write Delta at all, so nothing is queryable in
+    PostHog. That is the point: a customer can ask us to move their data without keeping a
+    copy. It is also the trap, since selecting a destination and expecting to keep the
+    warehouse would silently stop the PostHog side.
+    """
+    if _current_pipeline_mode != "v3":
+        pytest.skip("destinations only apply to pipeline_v3")
+
+    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+
+    await _run(
+        team=team,
+        schema_name=STRIPE_CHARGE_RESOURCE_NAME,
+        table_name="stripe_charge",
+        source_type="Stripe",
+        job_inputs=_STRIPE_JOB_INPUTS,
+        mock_data_response=stripe_charge["data"],
+        destinations=[destination],
+        # No Delta write, so the run has no storage delta for `_run` to assert on.
+        ignore_assertions=True,
+    )
+
+    rows = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+    assert len(rows) > 0
+
+    # Nothing was registered in PostHog, so there is no table to query.
+    exists = await sync_to_async(DataWarehouseTable.objects.filter(team_id=team.pk, name="stripe_charge").exists)()
+    assert not exists
+
+    run = await sync_to_async(ExternalDataJob.objects.filter(team_id=team.pk).order_by("-created_at").first)()
+    assert run is not None
+    assert run.destination_count == 1
