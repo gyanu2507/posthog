@@ -197,7 +197,7 @@ class PostgresProducer:
                 "metadata": json.dumps(metadata),
                 "destination_ids": json.dumps(self._destination_ids),
             },
-        ).fetchone()
+        )
 
         self._batches_sent += 1
         if is_final_batch:
