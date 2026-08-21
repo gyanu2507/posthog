@@ -100,13 +100,16 @@ function ReportChatConversation({
   const pendingQuote = useReportChatPanelStore(
     (s) => s.pendingQuoteByReport[reportId] ?? null,
   );
-  const clearPendingQuote = useReportChatPanelStore((s) => s.clearPendingQuote);
+  const takePendingQuote = useReportChatPanelStore((s) => s.takePendingQuote);
   const { setDraft, getDraft, requestFocus } = useDraftStore((s) => s.actions);
 
   // A highlighted passage lands in the session composer's draft (keyed by task
   // id), appended after anything already typed rather than replacing it.
   useEffect(() => {
     if (!pendingQuote || !task) return;
+    // Taken atomically so a double-fired effect can't paste the quote twice.
+    const quote = takePendingQuote(reportId);
+    if (!quote) return;
     const existing = getDraft(taskId);
     const existingText =
       typeof existing === "string"
@@ -115,10 +118,9 @@ function ReportChatConversation({
           ? contentToPlainText(existing)
           : "";
     const combined = existingText.trim()
-      ? `${existingText.trimEnd()}\n\n${pendingQuote}`
-      : pendingQuote;
+      ? `${existingText.trimEnd()}\n\n${quote}`
+      : quote;
     setDraft(taskId, textToContent(combined));
-    clearPendingQuote(reportId);
     requestFocus(taskId);
   }, [
     pendingQuote,
@@ -127,7 +129,7 @@ function ReportChatConversation({
     reportId,
     getDraft,
     setDraft,
-    clearPendingQuote,
+    takePendingQuote,
     requestFocus,
   ]);
 
@@ -153,17 +155,19 @@ function ReportChatStarter({ report }: { report: SignalReport }) {
   const pendingQuote = useReportChatPanelStore(
     (s) => s.pendingQuoteByReport[report.id] ?? null,
   );
-  const clearPendingQuote = useReportChatPanelStore((s) => s.clearPendingQuote);
+  const takePendingQuote = useReportChatPanelStore((s) => s.takePendingQuote);
 
   const [question, setQuestion] = useState("");
 
+  // Taken atomically so a double-fired effect can't paste the quote twice.
   useEffect(() => {
     if (!pendingQuote) return;
+    const quote = takePendingQuote(report.id);
+    if (!quote) return;
     setQuestion((current) =>
-      current.trim() ? `${current.trimEnd()}\n\n${pendingQuote}` : pendingQuote,
+      current.trim() ? `${current.trimEnd()}\n\n${quote}` : quote,
     );
-    clearPendingQuote(report.id);
-  }, [pendingQuote, clearPendingQuote, report.id]);
+  }, [pendingQuote, takePendingQuote, report.id]);
 
   // Discussions file into the report's space, or #general when it has none —
   // a task without a channel shows in no space's sidebar at all.

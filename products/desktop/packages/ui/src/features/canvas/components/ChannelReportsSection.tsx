@@ -56,12 +56,22 @@ export function ChannelReportsSection({
   const [sentinelRef, sentinelInView] = useInView<HTMLDivElement>({
     rootMargin: "600px 0px",
   });
+  // The working set is a capped digest of the first pages — auto-paging the
+  // whole project under it burns requests to grow a number nobody asked for.
+  const autoPage = workingSet == null;
   useEffect(() => {
-    if (!sentinelInView || !hasNextPage || isFetchingNextPage || isLoading) {
+    if (
+      !autoPage ||
+      !sentinelInView ||
+      !hasNextPage ||
+      isFetchingNextPage ||
+      isLoading
+    ) {
       return;
     }
     fetchNextPage();
   }, [
+    autoPage,
     sentinelInView,
     hasNextPage,
     isFetchingNextPage,
@@ -186,7 +196,7 @@ export function ChannelReportsSection({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="scroll-mask-4 min-h-0 flex-1 overflow-y-auto">
         {body}
-        {!isLoading && !isError && (hasNextPage || isFetchingNextPage) && (
+        {!isLoading && !isError && autoPage && (hasNextPage || isFetchingNextPage) && (
           <div
             ref={sentinelRef}
             className="flex items-center justify-center py-2"

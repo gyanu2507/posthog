@@ -19,10 +19,15 @@ interface ReportChatPanelState {
   setWidth: (width: number) => void;
   rememberStartedTask: (reportId: string, taskId: string) => void;
   setPendingQuote: (reportId: string, quote: string) => void;
-  clearPendingQuote: (reportId: string) => void;
+  /**
+   * Read and clear in one call. Consumers take rather than read+clear:
+   * effects run twice under StrictMode, and a second take returns null
+   * instead of pasting the quote again.
+   */
+  takePendingQuote: (reportId: string) => string | null;
 }
 
-export const useReportChatPanelStore = create<ReportChatPanelState>((set) => ({
+export const useReportChatPanelStore = create<ReportChatPanelState>((set, get) => ({
   open: false,
   width: 420,
   startedTaskIdByReport: {},
@@ -43,10 +48,14 @@ export const useReportChatPanelStore = create<ReportChatPanelState>((set) => ({
         [reportId]: quote,
       },
     })),
-  clearPendingQuote: (reportId) =>
-    set((state) => {
-      if (!(reportId in state.pendingQuoteByReport)) return state;
-      const { [reportId]: _, ...rest } = state.pendingQuoteByReport;
-      return { pendingQuoteByReport: rest };
-    }),
+  takePendingQuote: (reportId) => {
+    const quote = get().pendingQuoteByReport[reportId] ?? null;
+    if (quote !== null) {
+      set((state) => {
+        const { [reportId]: _, ...rest } = state.pendingQuoteByReport;
+        return { pendingQuoteByReport: rest };
+      });
+    }
+    return quote;
+  },
 }));

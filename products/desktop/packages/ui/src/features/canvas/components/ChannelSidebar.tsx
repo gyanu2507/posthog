@@ -40,6 +40,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@posthog/quill";
+import { CountBadge } from "@posthog/ui/primitives/CountBadge";
 import { LOOPS_FLAG } from "@posthog/shared";
 import type { Task } from "@posthog/shared/domain-types";
 import { ChannelBackRow } from "@posthog/ui/features/canvas/components/ChannelBackRow";
@@ -185,12 +186,11 @@ function RecentSectionHeader({
               >
                 <span className="truncate">{label}</span>
                 {badge != null && badge > 0 && value !== tab && (
-                  <span
-                    className="ml-1 shrink-0 rounded-full bg-(--amber-9) px-1 font-semibold text-[9.5px] text-white tabular-nums leading-[13px]"
+                  <CountBadge
+                    count={badge}
+                    className="ml-1 h-4 min-w-4 text-[9px]"
                     title={`${badge} report${badge === 1 ? "" : "s"} waiting on a decision`}
-                  >
-                    {badge}
-                  </span>
+                  />
                 )}
               </TabsTrigger>
             ))}
