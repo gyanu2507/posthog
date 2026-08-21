@@ -1,4 +1,8 @@
-import { ArrowSquareOutIcon, GitPullRequestIcon } from "@phosphor-icons/react";
+import {
+  ArchiveIcon,
+  ArrowSquareOutIcon,
+  GitPullRequestIcon,
+} from "@phosphor-icons/react";
 import { extractRepoSelectionRepository } from "@posthog/core/inbox/artefacts";
 import { canCreateImplementationPr } from "@posthog/core/inbox/reportActions";
 import {
@@ -17,6 +21,7 @@ import {
 import type { SignalReport } from "@posthog/shared/types";
 import { useCreatePrReport } from "@posthog/ui/features/inbox/hooks/useCreatePrReport";
 import { useInboxReportArtefacts } from "@posthog/ui/features/inbox/hooks/useInboxReports";
+import { useInboxReportDismissAction } from "@posthog/ui/features/inbox/hooks/useInboxReportDismissAction";
 import { useReportActionTracker } from "@posthog/ui/features/inbox/hooks/useReportActionTracker";
 import {
   findContinuableImplementationTask,
@@ -90,6 +95,18 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
   const [prOpen, setPrOpen] = useState(false);
   const [prFeedback, setPrFeedback] = useState("");
 
+  // Archive is the "no" beside Create PR's "yes" — a decision, so it lives in
+  // the decision row. Offered wherever the report is waiting on a person
+  // (several verdict bodies tell the reader to archive; the button should be
+  // right there). Running reports keep it out of the banner — the header's
+  // Dismiss covers that rare case.
+  const { dialog: dismissDialog, openDialog: openDismissDialog } =
+    useInboxReportDismissAction(report);
+  const canArchiveHere =
+    report.status === "ready" ||
+    report.status === "failed" ||
+    report.status === "pending_input";
+
   const handleCreatePr = useCallback(() => {
     const trimmed = prFeedback.trim();
     fireAction("create_pr", {
@@ -108,7 +125,8 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
   }, [continuableTask, fireAction, openTask]);
 
   const showActions =
-    report.status === "ready" && (hasExistingPr || canCreatePr);
+    (report.status === "ready" && (hasExistingPr || canCreatePr)) ||
+    canArchiveHere;
 
   return (
     <div
@@ -127,7 +145,7 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
 
       {showActions && (
         <div className="flex flex-wrap items-center gap-2.5">
-          {hasExistingPr ? (
+          {report.status === "ready" && hasExistingPr ? (
             <>
               <Button
                 type="button"
@@ -141,7 +159,7 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
                 ) : (
                   <GitPullRequestIcon size={15} />
                 )}
-                Continue existing PR
+                Continue the task
               </Button>
               {existingPrUrl && (
                 <a
@@ -155,7 +173,7 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
                 </a>
               )}
             </>
-          ) : (
+          ) : report.status === "ready" && canCreatePr ? (
             <Popover
               open={prOpen}
               onOpenChange={(next) => {
@@ -219,9 +237,21 @@ export function ReportVerdictBanner({ report }: ReportVerdictBannerProps) {
                 </div>
               </PopoverContent>
             </Popover>
+          ) : null}
+          {canArchiveHere && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={openDismissDialog}
+              className={BIG_BUTTON}
+            >
+              <ArchiveIcon size={15} />
+              Archive…
+            </Button>
           )}
         </div>
       )}
+      {dismissDialog}
     </div>
   );
 }

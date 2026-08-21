@@ -173,43 +173,58 @@ export function ReportDetailActions({
         </Popover>
       )}
 
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-label="More report actions"
-            >
-              <DotsThreeIcon size={14} weight="bold" />
-            </Button>
-          }
-        />
-        <DropdownMenuContent align="end" side="bottom" sideOffset={6}>
-          {prUrl && (
-            <DropdownMenuItem
-              onClick={() => window.open(prUrl, "_blank", "noopener")}
-            >
-              <ArrowSquareOutIcon size={13} />
-              Open in GitHub
+      {/* An overflow menu earns its click only with something to hide; when
+          Copy link is the lone occasional action, it shows directly. */}
+      {!prUrl && !refund.canRefund ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label="Copy link to this report"
+          title="Copy link to this report"
+          onClick={() => copyInboxReportLink(report)}
+        >
+          <CopyIcon size={13} />
+        </Button>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label="More report actions"
+              >
+                <DotsThreeIcon size={14} weight="bold" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" side="bottom" sideOffset={6}>
+            {prUrl && (
+              <DropdownMenuItem
+                onClick={() => window.open(prUrl, "_blank", "noopener")}
+              >
+                <ArrowSquareOutIcon size={13} />
+                Open in GitHub
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={() => copyInboxReportLink(report)}>
+              <CopyIcon size={13} />
+              Copy link
             </DropdownMenuItem>
-          )}
-          <DropdownMenuItem onClick={() => copyInboxReportLink(report)}>
-            <CopyIcon size={13} />
-            Copy link
-          </DropdownMenuItem>
-          {refund.canRefund && (
-            <DropdownMenuItem
-              disabled={refund.disabledReason !== null}
-              onClick={() => setRefundOpen(true)}
-            >
-              <ReceiptIcon size={13} />
-              Refund…
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+            {refund.canRefund && (
+              <DropdownMenuItem
+                disabled={refund.disabledReason !== null}
+                onClick={() => setRefundOpen(true)}
+              >
+                <ReceiptIcon size={13} />
+                Refund…
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
 
       {refund.canRefund && (
         <RefundReportDialog
