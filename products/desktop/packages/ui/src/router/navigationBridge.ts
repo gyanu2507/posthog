@@ -200,8 +200,11 @@ export function navigateToCommandCenter(): void {
   track(ANALYTICS_EVENTS.COMMAND_CENTER_VIEWED);
 }
 
-export function navigateToContext(): void {
-  void getRouterOrNull()?.navigate({ to: "/context" });
+export function navigateToContext(path?: string): void {
+  void getRouterOrNull()?.navigate({
+    to: "/context",
+    search: path ? { path } : {},
+  });
 }
 
 export function navigateToSkills(): void {
@@ -226,8 +229,11 @@ export function navigateToCanvas(): void {
   void getRouterOrNull()?.navigate({ to: "/website" });
 }
 
-export function navigateToWebsiteContext(): void {
-  void getRouterOrNull()?.navigate({ to: "/website/context" });
+export function navigateToWebsiteContext(path?: string): void {
+  void getRouterOrNull()?.navigate({
+    to: "/website/context",
+    search: path ? { path } : {},
+  });
 }
 
 export function navigateToWebsiteSkills(): void {
