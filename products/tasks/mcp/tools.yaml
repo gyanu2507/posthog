@@ -102,6 +102,9 @@ tools:
     code-sandbox-pricing-list:
         operation: code_sandbox_pricing_list
         enabled: false
+    desktop-access-retrieve:
+        operation: desktop_access_retrieve
+        enabled: false
     loops-create:
         operation: loops_create
         enabled: true
