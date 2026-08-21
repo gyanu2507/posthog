@@ -766,22 +766,9 @@ def _process_external_destinations_only(
 
     from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.delivery import (  # noqa: PLC0415
         deliver_batch_to_destinations,
-        external_destinations_for,
     )
 
-    pending = [
-        destination
-        for destination in external_destinations_for(export_signal)
-        if not is_batch_already_processed(
-            export_signal.team_id,
-            export_signal.schema_id,
-            export_signal.run_uuid,
-            export_signal.batch_index,
-            destination_id=str(destination.id),
-        )
-    ]
-
-    deliver_batch_to_destinations(export_signal, pending)
+    deliver_batch_to_destinations(export_signal)
 
     if not export_signal.is_final_batch:
         return
@@ -810,7 +797,6 @@ def _process_message_reported(
     # imports `load.idempotency`, so a module-level import closes the cycle.
     from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.destinations_load.delivery import (  # noqa: PLC0415
         deliver_batch_to_destinations,
-        external_destinations_for,
         warehouse_is_a_destination,
     )
 
@@ -850,26 +836,11 @@ def _process_message_reported(
             delta_table_ref=delta_table_ref,
         )
 
-        # A batch is done only once every destination has taken it. Checking the warehouse
-        # alone would let a retry return early after Redshift failed, and Redshift would
-        # never receive the batch.
-        pending_destinations = [
-            destination
-            for destination in external_destinations_for(export_signal)
-            if not is_batch_already_processed(
-                export_signal.team_id,
-                export_signal.schema_id,
-                export_signal.run_uuid,
-                export_signal.batch_index,
-                destination_id=str(destination.id),
-            )
-        ]
-
-        if already_processed and pending_destinations:
-            # The warehouse has this batch but at least one destination does not, so deliver
-            # the rest without re-writing delta.
-            deliver_batch_to_destinations(export_signal, pending_destinations)
-            pending_destinations = []
+        # The warehouse having this batch says nothing about the other destinations, so
+        # delivery runs on every path and decides for itself what is left to do. Gating it on
+        # the warehouse's marker would strand a destination that failed, and gating publication
+        # on the write marker would leave a full refresh staged and never swapped in.
+        deliver_batch_to_destinations(export_signal)
 
         if already_processed and not export_signal.is_final_batch:
             IDEMPOTENCY_HIT_TOTAL.labels(team_id=team_id_str, schema_id=schema_id_str).inc()
@@ -1064,10 +1035,6 @@ def _process_message_reported(
             previous_file_uris=previous_file_uris,
             internal_schema=internal_schema,
         )
-
-        # Before the final batch may complete the run: every destination must have the batch.
-        # A failure here raises and the batch is retried, skipping whatever already landed.
-        deliver_batch_to_destinations(export_signal, pending_destinations)
 
         if export_signal.is_final_batch:
             logger.info(
