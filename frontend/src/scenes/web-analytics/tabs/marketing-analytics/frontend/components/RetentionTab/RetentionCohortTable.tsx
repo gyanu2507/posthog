@@ -23,6 +23,7 @@ import {
     MARKETING_ANALYTICS_RETENTION_COLLECTION_ID,
     marketingRetentionLogic,
 } from '../../logic/marketingRetentionLogic'
+import { RetentionSummaryTable } from './RetentionSummaryTable'
 
 /** Breakdown values expanded on arrival. The rest collapse, so a wide breakdown stays scannable. */
 const EXPANDED_BY_DEFAULT = 3
@@ -177,8 +178,16 @@ export function RetentionCohortTable({
     }
 
     return (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-4">
             {caveats.length > 0 && <div className="text-secondary text-xs">{caveats.join(' ')}</div>}
+            {/* Widest question first: which value wins. The baseline gives it something to be measured
+                against, and the per-cohort panels below are the detail behind both. */}
+            <RetentionSummaryTable
+                rows={rows}
+                labels={labels}
+                dimensionLabel={dimensionLabel}
+                loading={responseLoading}
+            />
             <div>
                 <div className="text-muted mb-1 text-xs font-semibold uppercase">
                     All {dimensionLabel.toLowerCase()}s
