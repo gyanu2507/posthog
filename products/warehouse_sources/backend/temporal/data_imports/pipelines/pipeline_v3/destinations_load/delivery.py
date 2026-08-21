@@ -100,7 +100,10 @@ def _run_context(export_signal: ExportSignalMessage, destination: ExternalDataDe
         destination_id=str(destination.id),
         destination_type=destination.type,
         destination_name=destination.name,
-        table_name=config.get("table_name") or export_signal.resource_name,
+        # Named after the resource, never after the destination: a destination is shared by
+        # every schema of every source pointed at it, so a configured table name would
+        # collapse them all into one table.
+        table_name=f"{config.get('table_prefix', '')}{export_signal.resource_name}",
         sync_type=export_signal.sync_type,
         primary_keys=tuple(export_signal.primary_keys or ()),
         config=config,

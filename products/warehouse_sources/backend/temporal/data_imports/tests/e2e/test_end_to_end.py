@@ -53,6 +53,7 @@ from posthog.hogql.query import execute_hogql_query
 from posthog.hogql_queries.insights.funnels.funnel import FunnelUDF
 from posthog.hogql_queries.insights.funnels.funnel_query_context import FunnelQueryContext
 from posthog.models.event.util import format_clickhouse_timestamp
+from posthog.models.integration import Integration
 from posthog.models.team.team import Team
 from posthog.temporal.common.shutdown import ShutdownMonitor, WorkerShuttingDownError
 from posthog.temporal.utils import ExternalDataWorkflowInputs
@@ -71,6 +72,10 @@ from products.warehouse_sources.backend.facade.models import (
     ExternalDataSchema,
     ExternalDataSource,
     get_latest_run_if_exists,
+)
+from products.warehouse_sources.backend.models.external_data_destination import (
+    ExternalDataDestination,
+    ExternalDataSourceDestination,
 )
 from products.warehouse_sources.backend.models.external_table_definitions import external_tables
 from products.warehouse_sources.backend.models.oom_event import ExternalDataSchemaOOMEvent
@@ -156,7 +161,7 @@ class _PostgresQueueReplay:
     through process_message(), mimicking what the real BatchConsumer does."""
 
     def __init__(self) -> None:
-        self._processed_batches: set[tuple[str, int]] = set()
+        self._processed_batches: set[tuple[str, int, str | None]] = set()
 
     def replay_batches_for_run(self, run_uuid: str) -> None:
         from django.db import connection as django_conn
@@ -167,7 +172,7 @@ class _PostgresQueueReplay:
                 SELECT id, team_id, schema_id, source_id, job_id, run_uuid,
                        batch_index, s3_path, row_count, byte_size, is_final_batch,
                        total_batches, total_rows, sync_type, cumulative_row_count,
-                       resource_name, is_resume, is_first_ever_sync, metadata
+                       resource_name, is_resume, is_first_ever_sync, metadata, destination_ids
                 FROM {BATCH_TABLE}
                 WHERE run_uuid = %s
                 ORDER BY created_at ASC, batch_index ASC
@@ -206,8 +211,11 @@ class _PostgresQueueReplay:
         run_uuid: str,
         batch_index: int,
         delta_table_ref: Any = None,
+        destination_id: str | None = None,
     ) -> bool:
-        key = (run_uuid, batch_index)
+        # Keyed by destination as well, mirroring the real check: a batch the warehouse has
+        # taken is not yet done for a destination that has not.
+        key = (run_uuid, batch_index, destination_id)
         if key in self._processed_batches:
             return True
         self._processed_batches.add(key)
@@ -388,6 +396,7 @@ async def _run(
     billable: Optional[bool] = None,
     ignore_assertions: Optional[bool] = False,
     activity_environment: Optional[WorkflowEnvironment] = None,
+    destinations: Optional[list["ExternalDataDestination"]] = None,
 ):
     source = await sync_to_async(ExternalDataSource.objects.create)(
         source_id=uuid.uuid4(),
@@ -409,6 +418,11 @@ async def _run(
         sync_type_config=sync_type_config or {},
     )
 
+    for destination in destinations or []:
+        await sync_to_async(ExternalDataSourceDestination.objects.create)(
+            team_id=team.pk, source=source, destination=destination
+        )
+
     workflow_id = str(uuid.uuid4())
     inputs = ExternalDataWorkflowInputs(
         team_id=team.id,
@@ -425,6 +439,10 @@ async def _run(
         mock.patch(
             "products.warehouse_sources.backend.temporal.data_imports.metrics.get_producer"
         ) as mock_app_metrics_producer_cls,
+        mock.patch(
+            "products.warehouse_sources.backend.temporal.data_imports.workflow_activities.create_job_model.is_multi_destination_enabled",
+            return_value=bool(destinations),
+        ),
     ):
         await _execute_run(workflow_id, inputs, mock_data_response, activity_environment)
 
@@ -4951,3 +4969,129 @@ async def test_postgres_switch_to_xmin_rebuilds_table(team, postgres_config, pos
     schema = await ExternalDataSchema.objects.aget(id=inputs.external_data_schema_id)
     assert schema.sync_type_config.get("reset_pipeline") is None
     assert schema.xmin_last_value is not None
+
+
+# --- Destinations ------------------------------------------------------------------------
+#
+# A source can sync to destinations besides the PostHog warehouse. These run the whole
+# pipeline and then read the rows back out of a real Postgres, because the parts that break
+# are the joins between pieces: the ids reaching the batch, the batch reaching the consumer,
+# and the consumer resolving a writer. Each of those looks fine in isolation.
+
+DESTINATION_SCHEMA = "destination_schema"
+
+
+async def _postgres_destination(team: Team, postgres_config: dict, connection) -> ExternalDataDestination:
+    """A Postgres destination pointed at the same database the source fixtures use."""
+    await connection.execute(f"CREATE SCHEMA IF NOT EXISTS {DESTINATION_SCHEMA}")
+    await connection.commit()
+
+    integration = await sync_to_async(Integration.objects.create)(
+        team=team,
+        kind=Integration.IntegrationKind.POSTGRESQL,
+        config={
+            "host": postgres_config["host"],
+            "port": postgres_config["port"],
+            "user": postgres_config["user"],
+            "ssl_mode": "prefer",
+        },
+        sensitive_config={"password": postgres_config["password"]},
+    )
+    return await sync_to_async(ExternalDataDestination.objects.create)(
+        team=team,
+        type=ExternalDataDestination.Type.POSTGRES,
+        name="customer postgres",
+        integration=integration,
+        config={"database": postgres_config["database"], "schema": DESTINATION_SCHEMA},
+    )
+
+
+async def _destination_rows(connection, table: str) -> list[tuple]:
+    """Rows at the destination. Identifiers are quoted, so the table keeps the resource's case."""
+    async with connection.cursor() as cursor:
+        await cursor.execute(f'SELECT id FROM "{DESTINATION_SCHEMA}"."{table}" ORDER BY id')
+        return await cursor.fetchall()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_source_syncs_to_a_postgres_destination(
+    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+):
+    if _current_pipeline_mode != "v3":
+        pytest.skip("destinations only apply to pipeline_v3")
+
+    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+
+    await _run(
+        team=team,
+        schema_name=STRIPE_CHARGE_RESOURCE_NAME,
+        table_name="stripe_charge",
+        source_type="Stripe",
+        job_inputs=_STRIPE_JOB_INPUTS,
+        mock_data_response=stripe_charge["data"],
+        destinations=[destination],
+    )
+
+    # The warehouse still has the rows, and so does the customer's Postgres.
+    res = await sync_to_async(execute_hogql_query)("SELECT id FROM stripe_charge", team)
+    assert len(res.results) > 0
+
+    rows = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+    assert len(rows) == len(res.results)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_run_with_a_destination_bills_for_both(
+    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+):
+    if _current_pipeline_mode != "v3":
+        pytest.skip("destinations only apply to pipeline_v3")
+
+    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+
+    await _run(
+        team=team,
+        schema_name=STRIPE_CHARGE_RESOURCE_NAME,
+        table_name="stripe_charge",
+        source_type="Stripe",
+        job_inputs=_STRIPE_JOB_INPUTS,
+        mock_data_response=stripe_charge["data"],
+        destinations=[destination],
+    )
+
+    run = await sync_to_async(ExternalDataJob.objects.filter(team_id=team.pk).order_by("-created_at").first)()
+    assert run is not None
+    # The warehouse and the Postgres destination, so rows bill twice over.
+    assert run.destination_count == 2
+    assert sorted(run.destination_ids) == sorted([str(destination.id)])  # the warehouse is implicit
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_second_sync_merges_into_the_destination_rather_than_duplicating(
+    team, stripe_charge, mock_stripe_client, postgres_config, postgres_connection
+):
+    if _current_pipeline_mode != "v3":
+        pytest.skip("destinations only apply to pipeline_v3")
+
+    destination = await _postgres_destination(team, postgres_config, postgres_connection)
+    run_kwargs: dict[str, Any] = {
+        "team": team,
+        "schema_name": STRIPE_CHARGE_RESOURCE_NAME,
+        "table_name": "stripe_charge",
+        "source_type": "Stripe",
+        "job_inputs": _STRIPE_JOB_INPUTS,
+        "mock_data_response": stripe_charge["data"],
+        "destinations": [destination],
+    }
+
+    await _run(**run_kwargs)
+    after_first = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+
+    await _run(**run_kwargs)
+    after_second = await _destination_rows(postgres_connection, STRIPE_CHARGE_RESOURCE_NAME)
+
+    # Same source rows delivered twice must not double up at the destination.
+    assert after_second == after_first
