@@ -43,6 +43,11 @@ export function useInboxAllReports(options?: {
   ignoreFilters?: boolean;
   pullRequestsOnly?: boolean;
   refetchIntervalMs?: number;
+  /**
+   * Overrides the pipeline status set (server-side, part of the query key).
+   * Callers sharing one dataset must pass the same value.
+   */
+  statusFilter?: string;
 }) {
   const ignoreScope = options?.ignoreScope ?? false;
   const ignoreFilters = options?.ignoreFilters ?? false;
@@ -86,7 +91,7 @@ export function useInboxAllReports(options?: {
       // matching its count query and the PostHog Cloud inbox.
       status: pullRequestsOnly
         ? INBOX_PULL_REQUEST_STATUS_FILTER
-        : INBOX_PIPELINE_STATUS_FILTER,
+        : (options?.statusFilter ?? INBOX_PIPELINE_STATUS_FILTER),
       has_implementation_pr: pullRequestsOnly ? true : undefined,
       ordering: buildSignalReportListOrdering(sortField, sortDirection),
       source_product:

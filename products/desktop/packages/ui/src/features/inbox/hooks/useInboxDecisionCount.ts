@@ -1,3 +1,4 @@
+import { REPORTS_INBOX_STATUS_FILTER } from "@posthog/core/inbox/reportFiltering";
 import { reportNeedsDecision } from "@posthog/core/inbox/reportInboxSections";
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { useMemo } from "react";
@@ -14,7 +15,10 @@ import { useMemo } from "react";
  * badge that follows it.
  */
 export function useInboxDecisionCount(): number {
-  const { scopedReports } = useInboxAllReports({ refetchIntervalMs: 60_000 });
+  const { scopedReports } = useInboxAllReports({
+    refetchIntervalMs: 60_000,
+    statusFilter: REPORTS_INBOX_STATUS_FILTER,
+  });
   return useMemo(
     () => scopedReports.filter(reportNeedsDecision).length,
     [scopedReports],

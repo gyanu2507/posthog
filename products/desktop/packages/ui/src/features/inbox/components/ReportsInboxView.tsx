@@ -9,7 +9,10 @@ import {
   humanizeReportTitle,
   parsePrUrl,
 } from "@posthog/core/inbox/reportPresentation";
-import { INBOX_DISMISSED_STATUS_FILTER } from "@posthog/core/inbox/reportFiltering";
+import {
+  INBOX_DISMISSED_STATUS_FILTER,
+  REPORTS_INBOX_STATUS_FILTER,
+} from "@posthog/core/inbox/reportFiltering";
 import { partitionInboxReports } from "@posthog/core/inbox/reportInboxSections";
 import {
   Button,
@@ -65,11 +68,18 @@ export function ReportsInboxView() {
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
-  } = useInboxAllReports();
+  } = useInboxAllReports({ statusFilter: REPORTS_INBOX_STATUS_FILTER });
 
   const sections = useMemo(
     () => partitionInboxReports(scopedReports),
     [scopedReports],
+  );
+  const decisionPrCount = useMemo(
+    () =>
+      sections.decision.filter(
+        (r) => r.implementation_pr_url && !r.implementation_pr_merged,
+      ).length,
+    [sections.decision],
   );
 
   // Load the whole scoped list rather than counting a window of it: every
@@ -155,6 +165,11 @@ export function ReportsInboxView() {
             title="Needs a decision"
             reports={sections.decision}
             countsComplete={countsComplete}
+            caption={
+              decisionPrCount > 0
+                ? `${decisionPrCount} with a PR to review`
+                : undefined
+            }
             emptyNote="Nothing waiting on you."
           />
           <InboxSection
@@ -181,12 +196,15 @@ function InboxSection({
   title,
   reports,
   countsComplete = true,
+  caption,
   emptyNote,
 }: {
   title: string;
   reports: SignalReport[];
   /** False while pages are still loading (or capped): the count wears a "+". */
   countsComplete?: boolean;
+  /** Secondary breakdown shown after the count (e.g. "37 with a PR to review"). */
+  caption?: string;
   emptyNote?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -201,6 +219,11 @@ function InboxSection({
           ({reports.length}
           {countsComplete ? "" : "+"})
         </span>
+        {caption && (
+          <span className="font-normal normal-case tracking-normal">
+            · {caption}
+          </span>
+        )}
       </h2>
       {reports.length === 0 ? (
         <p className="px-1 py-2 text-[12.5px] text-gray-10">{emptyNote}</p>
