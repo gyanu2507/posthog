@@ -459,6 +459,7 @@ describe("ChannelItemRow", () => {
       kind: "canvas",
       id: "c1",
       title: "Web analytics overview",
+      authorUser: { id: 999, uuid: "u-1", email: "owner@example.com" },
     });
     renderInList(
       <ChannelItemRow actions={actions} isActive={false} item={canvas} />,
@@ -474,6 +475,26 @@ describe("ChannelItemRow", () => {
     for (const absent of ["Archive", "Add to Command Center"]) {
       expect(screen.queryByRole("button", { name: absent })).toBeNull();
     }
+  });
+
+  it("does not offer filing for another user's canvas", async () => {
+    const canvas = item({
+      key: "canvas:c1",
+      kind: "canvas",
+      id: "c1",
+      title: "Web analytics overview",
+      authorUser: { id: 7, uuid: "u-2", email: "creator@example.com" },
+    });
+    renderInList(
+      <ChannelItemRow actions={actions} isActive={false} item={canvas} />,
+    );
+
+    await userEvent.hover(screen.getByText("Web analytics overview"));
+
+    expect(
+      await screen.findByRole("button", { name: "Pin" }, { timeout: 2000 }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "File to…" })).toBeNull();
   });
 
   it("confirms before deleting a canvas — it goes for the whole space", async () => {

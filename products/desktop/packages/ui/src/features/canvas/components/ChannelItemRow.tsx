@@ -291,6 +291,10 @@ export function ChannelItemRow({
     item.task != null &&
     item.authorUser?.id != null &&
     currentUser.data?.id === item.authorUser.id;
+  const canFileCanvas =
+    item.kind === "canvas" &&
+    item.authorUser?.id != null &&
+    currentUser.data?.id === item.authorUser.id;
   const handleDragStart = useCallback(
     (event: DragEvent) => {
       if (item.kind !== "task") return;
@@ -319,8 +323,12 @@ export function ChannelItemRow({
             title: item.title,
             isPinned: item.pinned,
             channelId,
-            onFile: (targetChannelId) =>
-              actions.fileCanvas(item, targetChannelId),
+            ...(canFileCanvas
+              ? {
+                  onFile: (targetChannelId: string) =>
+                    actions.fileCanvas(item, targetChannelId),
+                }
+              : {}),
             onTogglePin: () => actions.togglePin(item),
             // Confirm first, like the canvas menus in the artifacts grid and
             // the canvas header: the canvas and its history go for everyone.
@@ -340,7 +348,15 @@ export function ChannelItemRow({
           },
     // canHandoff rides on the currentUser query, so it belongs in deps for a
     // sign-in refresh to re-evaluate.
-    [item, channelId, actions, onAddToCommandCenter, onRename, canHandoff],
+    [
+      item,
+      channelId,
+      actions,
+      onAddToCommandCenter,
+      onRename,
+      canHandoff,
+      canFileCanvas,
+    ],
   );
 
   if (isEditing) {

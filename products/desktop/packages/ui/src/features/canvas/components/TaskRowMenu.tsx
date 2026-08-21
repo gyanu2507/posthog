@@ -157,7 +157,7 @@ function TaskRowMenuItems({
           Add to Command Center
         </Item>
       )}
-      {channelItems.length > 0 && (
+      {channelItems.length > 0 && (isTask || menu.onFile) && (
         <Sub>
           <SubTrigger>
             <FolderSimpleIcon size={14} />
