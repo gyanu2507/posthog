@@ -56874,8 +56874,6 @@ export namespace Schemas {
       Cloud: 'cloud',
     } as const;
 
-    export type WizardWorkspace = LocalFolderWorkspace | GitRepositoryWorkspace;
-
     export interface WizardProgram {
       /** Stable identifier used to select the program. */
       readonly id: string;
@@ -56894,6 +56892,17 @@ export namespace Schemas {
       /** Environments where the program can run. */
       readonly supported_environments: readonly RunEnvironmentEnum[];
     }
+
+    export interface PaginatedWizardProgramList {
+      count: number;
+      /** @nullable */
+      next?: string | null;
+      /** @nullable */
+      previous?: string | null;
+      results: WizardProgram[];
+    }
+
+    export type WizardWorkspace = LocalFolderWorkspace | GitRepositoryWorkspace;
 
     /**
      * * `created` - created
@@ -95825,6 +95834,17 @@ export namespace Schemas {
     };
 
     export type WebVitalsRetrieve200 = { [key: string]: unknown };
+
+    export type WizardRegistryListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
+    };
 
     export type WizardRunsListParams = {
     /**
