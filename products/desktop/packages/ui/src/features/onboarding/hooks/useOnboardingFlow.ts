@@ -129,7 +129,6 @@ export function useOnboardingFlow() {
     ],
   );
 
-  const hasCodeAccess = useAuthStateValue((state) => state.hasCodeAccess);
   const hasImportableConfig = useHasImportableConfig();
   const { data: githubUserIntegrations } = useUserGithubIntegrations();
   const hasGithubIntegration = githubUserIntegrations
@@ -153,12 +152,11 @@ export function useOnboardingFlow() {
   const activeSteps = useMemo(
     () =>
       computeActiveSteps({
-        hasCodeAccess,
         hasImportableConfig,
         hasGithubIntegration,
         projectCount,
       }),
-    [hasCodeAccess, hasImportableConfig, hasGithubIntegration, projectCount],
+    [hasImportableConfig, hasGithubIntegration, projectCount],
   );
 
   useEffect(() => {
