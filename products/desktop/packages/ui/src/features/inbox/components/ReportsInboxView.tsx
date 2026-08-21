@@ -1,6 +1,5 @@
 import {
   CaretDownIcon,
-  CrosshairIcon,
   EnvelopeSimpleIcon,
   GitPullRequestIcon,
 } from "@phosphor-icons/react";
@@ -33,11 +32,8 @@ import type { SignalReport } from "@posthog/shared/types";
 import { InboxScopeSelect } from "@posthog/ui/features/inbox/components/InboxScopeSelect";
 import { InboxSearchFilterBar } from "@posthog/ui/features/inbox/components/InboxSearchFilterBar";
 import { SuggestedReviewerAvatarStack } from "@posthog/ui/features/inbox/components/SuggestedReviewerAvatarStack";
+import { useInboxDecisionCount } from "@posthog/ui/features/inbox/hooks/useInboxDecisionCount";
 import { useInboxReportDismissAction } from "@posthog/ui/features/inbox/hooks/useInboxReportDismissAction";
-import {
-  KeyCap,
-  ReportTriageFocus,
-} from "@posthog/ui/features/inbox/components/ReportTriageFocus";
 import { SignalReportPriorityBadge } from "@posthog/ui/features/inbox/components/utils/SignalReportPriorityBadge";
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
 import { useInboxReportsInfinite } from "@posthog/ui/features/inbox/hooks/useInboxReports";
@@ -58,16 +54,6 @@ const SORT_LABELS: Record<InboxReportSort, string> = {
   newest: "Newest",
 };
 
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return (
-    target.isContentEditable ||
-    target.tagName === "INPUT" ||
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT"
-  );
-}
-
 /**
  * The global reports inbox: every report in the project on one page,
  * sectioned by what it asks (a decision, or just watching), quantified by the
@@ -84,37 +70,15 @@ export function ReportsInboxView() {
     fetchNextPage,
   } = useInboxAllReports();
   const [sort, setSort] = useState<InboxReportSort>("evidence");
-  const [focusMode, setFocusMode] = useState(false);
 
   const sections = useMemo(
     () => buildInboxReportSections(scopedReports, sort),
     [scopedReports, sort],
   );
-
-  // Focus mode from anywhere on the page, matching the button's advertised key.
-  useEffect(() => {
-    if (focusMode) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === "f" && sections.decision.length > 0) {
-        event.preventDefault();
-        setFocusMode(true);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusMode, sections.decision.length]);
-
-  if (focusMode) {
-    return (
-      <ReportTriageFocus
-        reports={sections.decision}
-        allReports={allReports}
-        onExit={() => setFocusMode(false)}
-      />
-    );
-  }
+  // The badge's number: same scope, filters ignored. The decision section
+  // captions its filtered count against this total, so the badge and the page
+  // can never silently disagree — a narrowed list says "12 of 80".
+  const decisionTotal = useInboxDecisionCount();
 
   const isEmpty =
     !isLoading &&
@@ -131,27 +95,18 @@ export function ReportsInboxView() {
             Issues and opportunities found in your product, ready to review
           </p>
         </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => navigateToAgents()}
+        >
+          Configure agents
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => navigateToAgents()}
-          >
-            Configure agents
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            disabled={sections.decision.length === 0}
-            onClick={() => setFocusMode(true)}
-          >
-            <CrosshairIcon size={13} />
-            Focus mode
-            <KeyCap>F</KeyCap>
-          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -205,6 +160,7 @@ export function ReportsInboxView() {
           <InboxSection
             title="Needs a decision"
             reports={sections.decision}
+            totalCount={decisionTotal}
             emptyNote="Nothing waiting on you."
           />
           <InboxSection title="Monitoring" reports={sections.monitoring} />
@@ -237,10 +193,13 @@ export function ReportsInboxView() {
 function InboxSection({
   title,
   reports,
+  totalCount,
   emptyNote,
 }: {
   title: string;
   reports: SignalReport[];
+  /** The unfiltered population (the badge's number), when it can differ. */
+  totalCount?: number;
   emptyNote?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -251,7 +210,11 @@ function InboxSection({
     <section className="flex flex-col gap-1.5">
       <h2 className="flex items-baseline gap-2 border-(--gray-5) border-b pb-1 font-medium text-[11px] text-gray-10 uppercase tracking-wide">
         {title}
-        <span className="tabular-nums">({reports.length})</span>
+        <span className="tabular-nums">
+          {totalCount != null && totalCount !== reports.length
+            ? `(${reports.length} of ${totalCount})`
+            : `(${reports.length})`}
+        </span>
       </h2>
       {reports.length === 0 ? (
         <p className="px-1 py-2 text-[12.5px] text-gray-10">{emptyNote}</p>

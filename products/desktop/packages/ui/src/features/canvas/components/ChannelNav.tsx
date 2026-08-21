@@ -5,7 +5,6 @@ import {
   HouseSimple,
   Lightning,
 } from "@phosphor-icons/react";
-import { reportNeedsDecision } from "@posthog/core/inbox/reportInboxSections";
 import {
   Button,
   cn,
@@ -31,7 +30,7 @@ import { useCommandCenterActiveCount } from "@posthog/ui/features/command-center
 import { useChannelReportsEnabled } from "@posthog/ui/features/feature-flags/useChannelReportsEnabled";
 import { useFeatureFlag } from "@posthog/ui/features/feature-flags/useFeatureFlag";
 import { useReportsInboxEnabled } from "@posthog/ui/features/feature-flags/useReportsInboxEnabled";
-import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
+import { useInboxDecisionCount } from "@posthog/ui/features/inbox/hooks/useInboxDecisionCount";
 import { openSettings } from "@posthog/ui/features/settings/hooks/useOpenSettings";
 import { CountBadge } from "@posthog/ui/primitives/CountBadge";
 import { LoopIcon } from "@posthog/ui/primitives/LoopIcon";
@@ -193,16 +192,7 @@ export function ChannelNav() {
   const reportsInboxEnabled = useReportsInboxEnabled();
   const showInbox = !channelReportsEnabled || reportsInboxEnabled;
 
-  // The one number the badge means: reports waiting on a decision, the same
-  // predicate the inbox's "Needs a decision" section counts with.
-  const { scopedReports } = useInboxAllReports({
-    ignoreFilters: true,
-    refetchIntervalMs: 60_000,
-  });
-  const decisionCount = useMemo(
-    () => scopedReports.filter(reportNeedsDecision).length,
-    [scopedReports],
-  );
+  const decisionCount = useInboxDecisionCount();
 
   const { unreadCount: unseenActivity } = useTaskActivity();
   const commandCenterCount = useCommandCenterActiveCount();
