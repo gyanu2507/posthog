@@ -1,6 +1,5 @@
 import type { SignalReport, SignalReportPriority } from "@posthog/shared/types";
 
-import { reportNeedsDecision } from "./reportInboxSections";
 import {
   isDismissedReport,
   isExcludedFromInbox,
@@ -157,16 +156,26 @@ export interface SidebarWorkingSet {
 }
 
 /**
+ * A report earns a sidebar row only when it is ready and the agent is done
+ * with it: research finished, nothing queued or running. Pending-input,
+ * failed, and still-running reports live in the global inbox — the sidebar is
+ * the sit-down-and-decide list, not the pipeline monitor.
+ */
+function isSidebarActionable(report: SignalReport): boolean {
+  return report.status === "ready";
+}
+
+/**
  * The sidebar Reports tab's whole content in the default browse state:
- * decisions waiting on a person, priority-first (unprioritized last, recency
- * breaking ties), capped hard. No tail below it — already-triaged and
+ * ready reports waiting on a person, priority-first (unprioritized last,
+ * recency breaking ties), capped hard. No tail below it — already-triaged and
  * not-yet-actionable reports under the working set generate guilt, not
  * decisions; the feed and the global inbox carry them.
  */
 export function buildSidebarWorkingSet(
   orderedReports: SignalReport[],
 ): SidebarWorkingSet {
-  const decisions = orderedReports.filter(reportNeedsDecision);
+  const decisions = orderedReports.filter(isSidebarActionable);
   const reports = [...decisions]
     .sort((a, b) => {
       const aRank = a.priority

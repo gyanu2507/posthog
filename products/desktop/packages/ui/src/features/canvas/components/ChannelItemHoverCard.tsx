@@ -9,6 +9,10 @@ import {
   SpacePreview,
   type SpacePreviewPayload,
 } from "@posthog/ui/features/canvas/components/SpacePreview";
+import {
+  ReportPreview,
+  type ReportPreviewPayload,
+} from "@posthog/ui/features/canvas/components/ReportPreview";
 import type { TaskRowMenuProps } from "@posthog/ui/features/canvas/components/TaskRowMenu";
 import { useIsPinDragging } from "@posthog/ui/features/sidebar/pinDragStore";
 import {
@@ -46,7 +50,8 @@ const KEYBOARD_OPEN_DELAY_MS = 350;
  */
 export type ChannelPreviewPayload =
   | ({ kind: "item" } & ChannelItemPreviewPayload)
-  | ({ kind: "space" } & SpacePreviewPayload);
+  | ({ kind: "space" } & SpacePreviewPayload)
+  | ({ kind: "report" } & ReportPreviewPayload);
 
 /**
  * The shared card, and who currently owns it.
@@ -164,6 +169,12 @@ export function ChannelItemPreviewCardProvider({
                 >
                   {payload.kind === "space" ? (
                     <SpacePreview payload={payload} onAction={close} />
+                  ) : payload.kind === "report" ? (
+                    <ReportPreview
+                      key={payload.report.id}
+                      payload={payload}
+                      onAction={close}
+                    />
                   ) : (
                     <ChannelItemPreview
                       // Keyed on the row, so crossing to another one unmounts
@@ -311,6 +322,42 @@ export function SpaceHoverCard({
     <PreviewCard.Trigger
       handle={card.handle}
       payload={payload}
+      id={triggerId}
+      delay={OPEN_DELAY_MS}
+      closeDelay={CLOSE_DELAY_MS}
+      render={row}
+    />
+  );
+}
+
+/**
+ * A report row that shows the shared preview card while it is pointed at —
+ * the same handle as the session rows, so crossing between kinds of row moves
+ * one card instead of closing and reopening popups.
+ */
+export function ReportRowHoverCard({
+  payload,
+  children,
+}: {
+  payload: ReportPreviewPayload;
+  children: ReactNode;
+}) {
+  const card = useContext(ChannelItemPreviewHandleContext);
+  const stable = useMemo(
+    () => ({ kind: "report" as const, ...payload }),
+    [payload],
+  );
+  const triggerId = useId();
+  const row = (
+    <div className="flex min-w-0" onPointerEnter={card?.releaseKeyboard}>
+      {children}
+    </div>
+  );
+  if (!card) return row;
+  return (
+    <PreviewCard.Trigger
+      handle={card.handle}
+      payload={stable}
       id={triggerId}
       delay={OPEN_DELAY_MS}
       closeDelay={CLOSE_DELAY_MS}

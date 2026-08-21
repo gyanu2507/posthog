@@ -170,15 +170,19 @@ describe("buildSidebarWorkingSet", () => {
   it("keeps only decisions, priority-first, and counts everything else as remainder", () => {
     const { reports, decisionCount, remainderCount } = buildSidebarWorkingSet([
       report({ id: "running", status: "in_progress" }),
-      report({ id: "fyi", status: "ready", actionability: "not_actionable" }),
+      report({ id: "queued", status: "candidate" }),
+      report({ id: "waiting", status: "pending_input" }),
+      report({ id: "failed", status: "failed" }),
       report({ id: "p2", priority: "P2", updated_at: "2026-06-01T00:00:00Z" }),
       report({ id: "p0", priority: "P0", updated_at: "2026-05-01T00:00:00Z" }),
       report({ id: "none", updated_at: "2026-06-09T00:00:00Z" }),
     ]);
+    // Ready only: anything the agent still owns (running, queued, waiting on
+    // input, failed) stays out of the sit-down-and-decide list.
     expect(reports.map((r) => r.id)).toEqual(["p0", "p2", "none"]);
     // The badge number equals the rows shown whenever the cap isn't hit.
     expect(decisionCount).toBe(3);
-    expect(remainderCount).toBe(2);
+    expect(remainderCount).toBe(4);
   });
 
   it("caps the set hard and sends the overflow to the remainder", () => {

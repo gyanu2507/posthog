@@ -159,12 +159,14 @@ function RecentSectionHeader({
   const hasControls = showItemControls || !!filterControls;
   return (
     <>
-      <div className="flex items-center gap-0.5">
-        {/* The tabs name the list, so it has no label of its own. */}
+      <div className="flex flex-wrap items-center gap-0.5">
+        {/* The tabs name the list, so it has no label of its own. Controls
+            wrap under the tabs when the sidebar is narrow, so tab labels are
+            never cut off. */}
         <Tabs
           value={tab}
           onValueChange={(value: string) => onTabChange(value as ChannelTab)}
-          className="min-w-0 flex-1"
+          className="shrink-0"
         >
           {/* text-[13px] is the sidebar's own scale: quill's default tab is
               sized for a page header, which reads as a heading over this list. */}
@@ -172,19 +174,18 @@ function RecentSectionHeader({
               can't be utilities here, see the rule's comment. */}
           <TabsList
             variant="line"
-            className="quill-tabs-fill h-auto min-w-0 gap-0.5 overflow-hidden border-b-0"
+            className="quill-tabs-fill h-auto gap-0.5 border-b-0"
           >
-            {/* When space runs out, labels truncate instead of sliding under
-                the search button. The count is the working set's own decision
-                count — one number, same population as the list — and only on
-                an inactive tab, where the list isn't already answering it. */}
+            {/* The count is the working set's own decision count — one number,
+                same population as the list — and only on an inactive tab,
+                where the list isn't already answering it. */}
             {tabs.map(({ value, label, badge }) => (
               <TabsTrigger
                 key={value}
                 value={value}
-                className="min-w-0 rounded-sm px-1 py-0.5 text-[13px]"
+                className="shrink-0 rounded-sm px-1 py-0.5 text-[13px]"
               >
-                <span className="truncate">{label}</span>
+                <span className="whitespace-nowrap">{label}</span>
                 {badge != null && badge > 0 && value !== tab && (
                   <CountBadge
                     count={badge}
