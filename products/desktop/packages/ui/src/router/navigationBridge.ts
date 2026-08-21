@@ -203,7 +203,7 @@ export function navigateToCommandCenter(): void {
 export function navigateToContext(path?: string): void {
   void getRouterOrNull()?.navigate({
     to: "/context",
-    search: path ? { path } : {},
+    search: { path },
   });
 }
 
@@ -232,7 +232,7 @@ export function navigateToCanvas(): void {
 export function navigateToWebsiteContext(path?: string): void {
   void getRouterOrNull()?.navigate({
     to: "/website/context",
-    search: path ? { path } : {},
+    search: { path },
   });
 }
 
