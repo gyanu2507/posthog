@@ -25,10 +25,16 @@ const general = {
 describe("startup location", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("restores the exact last location without provisioning", async () => {
-    vi.spyOn(stateStorage, "getItem").mockResolvedValue("/code");
+  it("restores the exact last location", async () => {
+    vi.spyOn(stateStorage, "getItem").mockImplementation(async (key) =>
+      key.includes(":v2:") ? "/code" : null,
+    );
     const client = {
-      provisionDefaultTaskChannels: vi.fn(),
+      provisionDefaultTaskChannels: vi.fn().mockResolvedValue({
+        channels: [personal, general],
+        personal_created: false,
+        general_created: false,
+      }),
       startOnboardingSession: vi.fn(),
     };
 
@@ -38,7 +44,7 @@ describe("startup location", () => {
       href: "/code",
       firstRun: null,
     });
-    expect(client.provisionDefaultTaskChannels).not.toHaveBeenCalled();
+    expect(client.startOnboardingSession).not.toHaveBeenCalled();
   });
 
   it("lands a first-run user on the general space home", async () => {
@@ -210,6 +216,31 @@ describe("startup location", () => {
     await expect(
       resolveStartupLocation("project", client, false),
     ).resolves.toEqual({ href: "/code", firstRun: null });
+  });
+
+  it("takes the first run over a saved location when onboarding just provisioned", async () => {
+    vi.spyOn(stateStorage, "getItem").mockImplementation(async (key) =>
+      key.includes(":v2:") ? "/settings" : null,
+    );
+    const client = {
+      provisionDefaultTaskChannels: vi.fn(),
+      startOnboardingSession: vi.fn().mockResolvedValue("session-id"),
+    };
+    primeStartupProvision(
+      "project",
+      Promise.resolve({
+        channels: [personal, general],
+        personal_created: true,
+        general_created: false,
+      }),
+    );
+
+    await expect(
+      resolveStartupLocation("project", client, true),
+    ).resolves.toEqual({
+      href: "/website/general-id/tasks/session-id",
+      firstRun: { generalChannelId: "general-id" },
+    });
   });
 
   it("consumes a primed provisioning result exactly once", async () => {
