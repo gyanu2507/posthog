@@ -10,10 +10,7 @@ import {
   parsePrUrl,
 } from "@posthog/core/inbox/reportPresentation";
 import { INBOX_DISMISSED_STATUS_FILTER } from "@posthog/core/inbox/reportFiltering";
-import {
-  buildInboxReportSections,
-  type InboxReportSort,
-} from "@posthog/core/inbox/reportInboxSections";
+import { partitionInboxReports } from "@posthog/core/inbox/reportInboxSections";
 import {
   Button,
   DropdownMenu,
@@ -32,7 +29,6 @@ import type { SignalReport } from "@posthog/shared/types";
 import { InboxScopeSelect } from "@posthog/ui/features/inbox/components/InboxScopeSelect";
 import { InboxSearchFilterBar } from "@posthog/ui/features/inbox/components/InboxSearchFilterBar";
 import { SuggestedReviewerAvatarStack } from "@posthog/ui/features/inbox/components/SuggestedReviewerAvatarStack";
-import { useInboxDecisionCount } from "@posthog/ui/features/inbox/hooks/useInboxDecisionCount";
 import { useInboxReportDismissAction } from "@posthog/ui/features/inbox/hooks/useInboxReportDismissAction";
 import { SignalReportPriorityBadge } from "@posthog/ui/features/inbox/components/utils/SignalReportPriorityBadge";
 import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAllReports";
@@ -48,11 +44,12 @@ import { openExternalUrl } from "@posthog/ui/shell/openExternal";
 /** Rows shown per section before "Show more" — a scan, not a scroll. */
 const SECTION_PREVIEW_LIMIT = 5;
 
-const SORT_LABELS: Record<InboxReportSort, string> = {
-  evidence: "Most evidence",
-  priority: "Highest priority",
-  newest: "Newest",
-};
+/**
+ * How many reports auto-paging will load before stopping and marking counts
+ * incomplete ("+"). Bounds the page's cost on enormous projects while keeping
+ * counts exact for realistic scoped populations.
+ */
+const AUTOPAGE_REPORT_LIMIT = 400;
 
 /**
  * The global reports inbox: every report in the project on one page,
@@ -69,16 +66,35 @@ export function ReportsInboxView() {
     isFetchingNextPage,
     fetchNextPage,
   } = useInboxAllReports();
-  const [sort, setSort] = useState<InboxReportSort>("evidence");
 
   const sections = useMemo(
-    () => buildInboxReportSections(scopedReports, sort),
-    [scopedReports, sort],
+    () => partitionInboxReports(scopedReports),
+    [scopedReports],
   );
-  // The badge's number: same scope, filters ignored. The decision section
-  // captions its filtered count against this total, so the badge and the page
-  // can never silently disagree — a narrowed list says "12 of 80".
-  const decisionTotal = useInboxDecisionCount();
+
+  // Load the whole scoped list rather than counting a window of it: every
+  // number on this page (and the nav badge, which reads the same query) is
+  // derived from these rows, so an unloaded page is a wrong count. Capped so
+  // an enormous project degrades to explicit "+" counts instead of unbounded
+  // fetching.
+  const countsComplete = !hasNextPage;
+  useEffect(() => {
+    if (
+      !hasNextPage ||
+      isFetchingNextPage ||
+      isLoading ||
+      scopedReports.length >= AUTOPAGE_REPORT_LIMIT
+    ) {
+      return;
+    }
+    fetchNextPage();
+  }, [
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    scopedReports.length,
+    fetchNextPage,
+  ]);
 
   const isEmpty =
     !isLoading &&
@@ -107,28 +123,6 @@ export function ReportsInboxView() {
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1"
-                >
-                  Sort: {SORT_LABELS[sort]}
-                  <CaretDownIcon size={12} />
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end" side="bottom" sideOffset={6}>
-              {(Object.keys(SORT_LABELS) as InboxReportSort[]).map((key) => (
-                <DropdownMenuItem key={key} onClick={() => setSort(key)}>
-                  {SORT_LABELS[key]}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
           <InboxScopeSelect />
         </div>
       </div>
@@ -160,25 +154,18 @@ export function ReportsInboxView() {
           <InboxSection
             title="Needs a decision"
             reports={sections.decision}
-            totalCount={decisionTotal}
+            countsComplete={countsComplete}
             emptyNote="Nothing waiting on you."
           />
-          <InboxSection title="Monitoring" reports={sections.monitoring} />
+          <InboxSection
+            title="Monitoring"
+            reports={sections.monitoring}
+            countsComplete={countsComplete}
+          />
           <ResolvedSection />
-          {(hasNextPage || isFetchingNextPage) && (
+          {isFetchingNextPage && (
             <div className="flex justify-center py-2">
-              {isFetchingNextPage ? (
-                <Spinner />
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => fetchNextPage()}
-                >
-                  Load more
-                </Button>
-              )}
+              <Spinner />
             </div>
           )}
         </>
@@ -193,13 +180,13 @@ export function ReportsInboxView() {
 function InboxSection({
   title,
   reports,
-  totalCount,
+  countsComplete = true,
   emptyNote,
 }: {
   title: string;
   reports: SignalReport[];
-  /** The unfiltered population (the badge's number), when it can differ. */
-  totalCount?: number;
+  /** False while pages are still loading (or capped): the count wears a "+". */
+  countsComplete?: boolean;
   emptyNote?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -211,9 +198,8 @@ function InboxSection({
       <h2 className="flex items-baseline gap-2 border-(--gray-5) border-b pb-1 font-medium text-[11px] text-gray-10 uppercase tracking-wide">
         {title}
         <span className="tabular-nums">
-          {totalCount != null && totalCount !== reports.length
-            ? `(${reports.length} of ${totalCount})`
-            : `(${reports.length})`}
+          ({reports.length}
+          {countsComplete ? "" : "+"})
         </span>
       </h2>
       {reports.length === 0 ? (

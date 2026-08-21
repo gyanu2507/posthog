@@ -3,17 +3,18 @@ import { useInboxAllReports } from "@posthog/ui/features/inbox/hooks/useInboxAll
 import { useMemo } from "react";
 
 /**
- * The one number the inbox badges mean: reports waiting on a decision under
- * the current reviewer scope. Follows the For you / Entire project toggle and
- * deliberately ignores the inbox page's own search and filter chrome — the
- * badge is global chrome, so transient narrowing must not move it. The page
- * reconciles the two by captioning its section count against this total.
+ * The number the inbox badges show: loaded reports waiting on a decision,
+ * under the current reviewer scope and the inbox's own filters.
+ *
+ * Deliberately the SAME query the inbox page renders from — same server
+ * params, same cache key, same pages — so the badge and the page's "Needs a
+ * decision" count are two reads of one dataset and cannot disagree. The badge
+ * moving with the page's filters is the price of that guarantee, and the
+ * cheaper one: a badge that contradicts the list it points at is worse than a
+ * badge that follows it.
  */
 export function useInboxDecisionCount(): number {
-  const { scopedReports } = useInboxAllReports({
-    ignoreFilters: true,
-    refetchIntervalMs: 60_000,
-  });
+  const { scopedReports } = useInboxAllReports({ refetchIntervalMs: 60_000 });
   return useMemo(
     () => scopedReports.filter(reportNeedsDecision).length,
     [scopedReports],

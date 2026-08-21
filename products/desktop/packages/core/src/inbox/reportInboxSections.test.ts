@@ -1,10 +1,7 @@
 import type { SignalReport } from "@posthog/shared/types";
 import { describe, expect, it } from "vitest";
 
-import {
-  buildInboxReportSections,
-  sortInboxReports,
-} from "./reportInboxSections";
+import { partitionInboxReports } from "./reportInboxSections";
 
 function report(overrides: Partial<SignalReport>): SignalReport {
   return {
@@ -65,43 +62,21 @@ describe("reportInboxSections", () => {
     [{ status: "candidate" }, "monitoring"],
     [{ status: "in_progress" }, "monitoring"],
   ] as const)("%j lands in %s", (overrides, section) => {
-    const sections = buildInboxReportSections(
-      [report(overrides as Partial<SignalReport>)],
-      "newest",
-    );
+    const sections = partitionInboxReports([
+      report(overrides as Partial<SignalReport>),
+    ]);
     expect(sections.decision.length).toBe(section === "decision" ? 1 : 0);
     expect(sections.monitoring.length).toBe(section === "monitoring" ? 1 : 0);
   });
 
-  it("evidence sort puts the most-backed report first, weight breaking count ties", () => {
-    const ids = sortInboxReports(
-      [
-        report({ id: "light", signal_count: 2, total_weight: 2 }),
-        report({ id: "heavy-tie", signal_count: 5, total_weight: 9 }),
-        report({ id: "light-tie", signal_count: 5, total_weight: 3 }),
-      ],
-      "evidence",
-    ).map((r) => r.id);
-    expect(ids).toEqual(["heavy-tie", "light-tie", "light"]);
-  });
-
-  it("priority sort ranks P0 first and unprioritized last regardless of recency", () => {
-    const ids = sortInboxReports(
-      [
-        report({ id: "none-new", updated_at: "2026-06-09T00:00:00Z" }),
-        report({
-          id: "p2",
-          priority: "P2",
-          updated_at: "2026-06-01T00:00:00Z",
-        }),
-        report({
-          id: "p0",
-          priority: "P0",
-          updated_at: "2026-05-01T00:00:00Z",
-        }),
-      ],
-      "priority",
-    ).map((r) => r.id);
-    expect(ids).toEqual(["p0", "p2", "none-new"]);
+  it("partition preserves the list's own order within each section", () => {
+    const sections = partitionInboxReports([
+      report({ id: "d1" }),
+      report({ id: "m1", status: "in_progress" }),
+      report({ id: "d2" }),
+      report({ id: "m2", status: "candidate" }),
+    ]);
+    expect(sections.decision.map((r) => r.id)).toEqual(["d1", "d2"]);
+    expect(sections.monitoring.map((r) => r.id)).toEqual(["m1", "m2"]);
   });
 });
