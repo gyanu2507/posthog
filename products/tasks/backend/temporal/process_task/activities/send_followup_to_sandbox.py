@@ -682,11 +682,11 @@ def _resolve_live_sandbox(state: dict[str, Any] | None) -> Any:
     if not sandbox_id:
         return None
     from products.tasks.backend.logic.services.sandbox import (
-        Sandbox,  # noqa: PLC0415 — keep the sandbox service off the import path
+        get_sandbox_class_for_sandbox_id,  # noqa: PLC0415 — keep the sandbox service off the import path
     )
 
     try:
-        sandbox = Sandbox.get_by_id(sandbox_id)
+        sandbox = get_sandbox_class_for_sandbox_id(sandbox_id).get_by_id(sandbox_id)
         return sandbox if sandbox.is_running() else None
     except Exception:
         # This None drives a fail-closed follow-up rejection, so keep the cause: it
