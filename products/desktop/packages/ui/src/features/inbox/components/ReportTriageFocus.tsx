@@ -6,7 +6,10 @@ import {
   FileTextIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { humanizeReportTitle } from "@posthog/core/inbox/reportPresentation";
+import {
+  humanizeReportTitle,
+  splitReportSummary,
+} from "@posthog/core/inbox/reportPresentation";
 import {
   Button,
   Tooltip,
@@ -26,7 +29,7 @@ import { SignalReportSummaryMarkdown } from "@posthog/ui/features/inbox/componen
 import { useInboxBulkActions } from "@posthog/ui/features/inbox/hooks/useInboxBulkActions";
 import { RelativeTimestamp } from "@posthog/ui/primitives/RelativeTimestamp";
 import { navigateToInboxReportDetail } from "@posthog/ui/router/navigationBridge";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /** A keyboard hint chip; quill has no kbd primitive, so plain HTML carries it. */
 export function KeyCap({ children }: { children: string }) {
@@ -72,6 +75,10 @@ export function ReportTriageFocus({
   // than resetting) is what makes archive-and-advance work.
   const clamped = Math.min(index, Math.max(0, reports.length - 1));
   const report = reports[clamped];
+  const summarySplit = useMemo(
+    () => splitReportSummary(report?.summary),
+    [report?.summary],
+  );
 
   const bulkActions = useInboxBulkActions(
     allReports,
@@ -272,21 +279,52 @@ export function ReportTriageFocus({
             </Button>
           </div>
 
-          {/* The proof stays folded: triage reads the verdict, research opens
-              the full report. Unfolding here is the middle ground. */}
-          <DetailSection
-            Icon={FileTextIcon}
-            title="How we know"
-            collapsible
-            defaultCollapsed
-          >
-            <SignalReportSummaryMarkdown
-              content={report.summary}
-              fallback="No summary yet. The agent is still investigating."
-              variant="detail"
-              pending={report.status === "in_progress"}
-            />
-          </DetailSection>
+          {/* The proof stays sorted and folded — the same labeled slots as
+              the detail page. The lede (the summary's own tl;dr) shows since
+              it's triage-sized; each section opens on demand. Triage reads
+              the verdict; research opens the full report. */}
+          {summarySplit.sections.length === 0 ? (
+            <DetailSection
+              Icon={FileTextIcon}
+              title="How we know"
+              collapsible
+              defaultCollapsed
+            >
+              <SignalReportSummaryMarkdown
+                content={report.summary}
+                fallback="No summary yet. The agent is still investigating."
+                variant="detail"
+                pending={report.status === "in_progress"}
+              />
+            </DetailSection>
+          ) : (
+            <>
+              {summarySplit.lede && (
+                <SignalReportSummaryMarkdown
+                  content={summarySplit.lede}
+                  fallback=""
+                  variant="detail"
+                  pending={report.status === "in_progress"}
+                />
+              )}
+              {summarySplit.sections.map((section, sectionIndex) => (
+                <DetailSection
+                  key={`${section.title}-${sectionIndex}`}
+                  Icon={FileTextIcon}
+                  title={section.title}
+                  collapsible
+                  defaultCollapsed
+                >
+                  <SignalReportSummaryMarkdown
+                    content={section.body}
+                    fallback=""
+                    variant="detail"
+                    pending={false}
+                  />
+                </DetailSection>
+              ))}
+            </>
+          )}
         </div>
 
         <div className="flex items-center justify-center gap-4 text-[12px] text-gray-10">
